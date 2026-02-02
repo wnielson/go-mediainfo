@@ -8,6 +8,7 @@ import (
 type psStream struct {
 	kind   StreamKind
 	format string
+	bytes  uint64
 }
 
 func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool) {
@@ -39,7 +40,11 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				streamID := chunk[i+3]
 				kind, format := mapPSStream(streamID)
 				if kind != "" {
-					streams[kind] = psStream{kind: kind, format: format}
+					entry := streams[kind]
+					entry.kind = kind
+					entry.format = format
+					entry.bytes += uint64(len(chunk))
+					streams[kind] = entry
 				}
 				if i+9 >= len(chunk) {
 					continue
@@ -83,12 +88,25 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 
 	var streamsOut []Stream
 	for _, st := range streams {
-		streamsOut = append(streamsOut, Stream{Kind: st.kind, Fields: []Field{{Name: "Format", Value: st.format}}})
+		fields := []Field{}
+		if st.format != "" {
+			fields = append(fields, Field{Name: "Format", Value: st.format})
+		}
+		streamsOut = append(streamsOut, Stream{Kind: st.kind, Fields: fields})
 	}
 
 	info := ContainerInfo{}
 	if duration := durationFromPTS(firstPTSVideo, lastPTSVideo, hasPTSVideo); duration > 0 {
 		info.DurationSeconds = duration
+		for i := range streamsOut {
+			if streamsOut[i].Kind == StreamVideo {
+				streamsOut[i].Fields = addStreamDuration(streamsOut[i].Fields, duration)
+				if st, ok := streams[StreamVideo]; ok && st.bytes > 0 {
+					bits := (float64(st.bytes) * 8) / duration
+					streamsOut[i].Fields = addStreamBitrate(streamsOut[i].Fields, bits)
+				}
+			}
+		}
 	} else if duration := durationFromPTS(firstPTSAny, lastPTSAny, hasPTSAny); duration > 0 {
 		info.DurationSeconds = duration
 	}

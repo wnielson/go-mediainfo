@@ -11,6 +11,7 @@ type tsStream struct {
 	kind   StreamKind
 	format string
 	frames uint64
+	bytes  uint64
 }
 
 func ParseMPEGTS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool) {
@@ -98,6 +99,7 @@ func ParseMPEGTS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 		if _, ok := videoPIDs[pid]; ok {
 			entry := streams[pid]
 			entry.frames++
+			entry.bytes += uint64(len(payload))
 			streams[pid] = entry
 			if !hasPTSVideo {
 				firstPTSVideo = pts
@@ -110,14 +112,19 @@ func ParseMPEGTS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 	}
 
 	var streamsOut []Stream
+	videoDuration := durationFromPTS(firstPTSVideo, lastPTSVideo, hasPTSVideo)
 	for _, st := range streams {
 		fields := []Field{{Name: "ID", Value: formatStreamID(st.pid)}}
 		if st.format != "" {
 			fields = append(fields, Field{Name: "Format", Value: st.format})
 		}
-		duration := durationFromPTS(firstPTSVideo, lastPTSVideo, hasPTSVideo)
-		if st.kind == StreamVideo && duration > 0 {
-			if rate := estimateTSFrameRate(st.frames, duration); rate != "" {
+		if st.kind == StreamVideo && videoDuration > 0 {
+			fields = addStreamDuration(fields, videoDuration)
+			if st.bytes > 0 {
+				bits := (float64(st.bytes) * 8) / videoDuration
+				fields = addStreamBitrate(fields, bits)
+			}
+			if rate := estimateTSFrameRate(st.frames, videoDuration); rate != "" {
 				fields = append(fields, Field{Name: "Frame rate", Value: rate})
 			}
 		}

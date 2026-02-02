@@ -37,6 +37,7 @@ Owner: soup
 - Matroska: derive frame rate from DefaultDuration
 - General/stream fields now sorted to match MediaInfo ordering
 - MPEG-TS: estimate frame rate from video PES count vs PTS span
+- MPEG-TS/MPEG-PS: add video stream duration + bitrate (best-effort)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
