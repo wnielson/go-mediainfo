@@ -37,10 +37,10 @@ func TestRenderJSONMultiple(t *testing.T) {
 	}
 
 	output := RenderJSON([]Report{report, report})
-	if strings.Contains(output, "\"@type\": \"Video\"") {
-		t.Fatalf("unexpected video type in multi output")
+	if strings.Count(output, "\"media\"") != 1 {
+		t.Fatalf("expected media list")
 	}
-	if strings.Count(output, "\"@ref\"") != 2 {
-		t.Fatalf("expected two refs")
+	if strings.Count(output, "\"@ref\"") < 2 {
+		t.Fatalf("expected refs in list")
 	}
 }

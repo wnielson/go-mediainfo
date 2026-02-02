@@ -13,32 +13,26 @@ type jsonMediaBody struct {
 	Track []map[string]string `json:"track"`
 }
 
+type jsonMediaList struct {
+	Media []jsonMediaBody `json:"media"`
+}
+
 func RenderJSON(reports []Report) string {
 	if len(reports) == 1 {
 		return renderJSONSingle(reports[0])
 	}
 
-	tracks := make([]map[string]string, 0)
+	media := make([]jsonMediaBody, 0, len(reports))
 	for _, report := range reports {
-		entry := map[string]string{"@type": "General", "@ref": report.Ref}
-		for _, field := range report.General.Fields {
-			entry[field.Name] = field.Value
-		}
-		tracks = append(tracks, entry)
+		media = append(media, buildJSONMedia(report))
 	}
-
-	payload := jsonMedia{Media: jsonMediaBody{Track: tracks}}
+	payload := jsonMediaList{Media: media}
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	return string(data)
 }
 
 func renderJSONSingle(report Report) string {
-	tracks := make([]map[string]string, 0, len(report.Streams)+1)
-	tracks = append(tracks, streamToJSON(report.General))
-	for _, stream := range report.Streams {
-		tracks = append(tracks, streamToJSON(stream))
-	}
-	payload := jsonMedia{Media: jsonMediaBody{Ref: report.Ref, Track: tracks}}
+	payload := jsonMedia{Media: buildJSONMedia(report)}
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	return string(data)
 }
@@ -49,4 +43,17 @@ func streamToJSON(stream Stream) map[string]string {
 		entry[field.Name] = field.Value
 	}
 	return entry
+}
+
+func buildJSONMedia(report Report) jsonMediaBody {
+	tracks := make([]map[string]string, 0, len(report.Streams)+1)
+	general := streamToJSON(report.General)
+	if report.Ref != "" {
+		general["@ref"] = report.Ref
+	}
+	tracks = append(tracks, general)
+	for _, stream := range report.Streams {
+		tracks = append(tracks, streamToJSON(stream))
+	}
+	return jsonMediaBody{Ref: report.Ref, Track: tracks}
 }

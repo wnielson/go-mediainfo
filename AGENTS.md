@@ -38,6 +38,7 @@ Owner: soup
 - General/stream fields now sorted to match MediaInfo ordering
 - MPEG-TS: estimate frame rate from video PES count vs PTS span
 - MPEG-TS/MPEG-PS: add video stream duration + bitrate (best-effort)
+- MPEG-PS: per-stream IDs surfaced; JSON multi-file now outputs media list
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
