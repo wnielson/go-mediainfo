@@ -228,7 +228,7 @@ func runCore(opts Options, files []string) (string, int, error) {
 		if !known[outputName] {
 			return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
 		}
-		if outputName != "TEXT" && outputName != "JSON" && outputName != "XML" && outputName != "OLDXML" && outputName != "HTML" {
+		if outputName != "TEXT" && outputName != "JSON" && outputName != "XML" && outputName != "OLDXML" && outputName != "HTML" && outputName != "CSV" && outputName != "EBUCORE" && outputName != "EBUCORE_JSON" && outputName != "PBCORE" && outputName != "PBCORE2" {
 			return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
 		}
 	}
@@ -243,6 +243,15 @@ func runCore(opts Options, files []string) (string, int, error) {
 	}
 	if strings.EqualFold(opts.Output, "XML") || strings.EqualFold(opts.Output, "OLDXML") {
 		return mediainfo.RenderXML(reports), count, nil
+	}
+	if strings.EqualFold(opts.Output, "CSV") {
+		return mediainfo.RenderCSV(reports), count, nil
+	}
+	if strings.EqualFold(opts.Output, "EBUCORE") || strings.EqualFold(opts.Output, "EBUCORE_JSON") {
+		return mediainfo.RenderEBUCore(reports), count, nil
+	}
+	if strings.EqualFold(opts.Output, "PBCORE") || strings.EqualFold(opts.Output, "PBCORE2") {
+		return mediainfo.RenderPBCore(reports), count, nil
 	}
 	if strings.EqualFold(opts.Output, "HTML") {
 		return mediainfo.RenderHTML(reports), count, nil

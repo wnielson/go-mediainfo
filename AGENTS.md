@@ -52,6 +52,7 @@ Owner: soup
 - --info-parameters / --info-canhandleurls now implemented (basic)
 - Info-Parameters expanded to include IDs + menu group
 - Output format placeholders accepted for CSV/EBUCore/PBCore/Graph
+- CSV/EBUCore/PBCore renderers added (basic)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
