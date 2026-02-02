@@ -35,6 +35,8 @@ Owner: soup
 - Matroska: parse track video/audio settings (pixel width/height, channels, sampling rate)
 - MP4: derive frame rate from mdhd duration + stts sample count
 - Matroska: derive frame rate from DefaultDuration
+- General/stream fields now sorted to match MediaInfo ordering
+- MPEG-TS: estimate frame rate from video PES count vs PTS span
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

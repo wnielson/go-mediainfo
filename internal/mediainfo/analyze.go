@@ -79,6 +79,10 @@ func AnalyzeFile(path string) (Report, error) {
 		}
 	}
 
+	sortFields(StreamGeneral, general.Fields)
+	for i := range streams {
+		sortFields(streams[i].Kind, streams[i].Fields)
+	}
 	sortStreams(streams)
 	return Report{
 		Ref:     path,
