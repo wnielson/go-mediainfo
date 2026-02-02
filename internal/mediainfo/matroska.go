@@ -260,6 +260,9 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 	if kind == StreamAudio {
 		if audioChannels > 0 {
 			fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(audioChannels)})
+			if layout := channelLayout(audioChannels); layout != "" {
+				fields = append(fields, Field{Name: "Channel layout", Value: layout})
+			}
 		}
 		if audioSampleRate > 0 {
 			fields = append(fields, Field{Name: "Sampling rate", Value: formatSampleRate(audioSampleRate)})

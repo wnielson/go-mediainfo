@@ -114,6 +114,9 @@ func parseAudioSampleEntry(entry []byte) []Field {
 	fields := []Field{}
 	if channels > 0 {
 		fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(uint64(channels))})
+		if layout := channelLayout(uint64(channels)); layout != "" {
+			fields = append(fields, Field{Name: "Channel layout", Value: layout})
+		}
 	}
 	if sampleRate > 0 {
 		rate := float64(sampleRate) / 65536

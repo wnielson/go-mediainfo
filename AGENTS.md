@@ -44,6 +44,7 @@ Owner: soup
 - TS/PS: per-stream PTS tracking for non-video durations
 - Stream common helper added for duration/bitrate fields
 - JSON track ordering now stable; MP4/MKV audio durations added
+- Channel layout now emitted for common channel counts
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
