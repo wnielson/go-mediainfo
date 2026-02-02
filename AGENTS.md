@@ -45,6 +45,7 @@ Owner: soup
 - Stream common helper added for duration/bitrate fields
 - JSON track ordering now stable; MP4/MKV audio durations added
 - Channel layout now emitted for common channel counts
+- JSON field ordering now matches CLI ordering
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

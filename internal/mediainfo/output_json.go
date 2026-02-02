@@ -47,7 +47,7 @@ func streamToJSON(stream Stream) map[string]string {
 
 func buildJSONMedia(report Report) jsonMediaBody {
 	tracks := make([]map[string]string, 0, len(report.Streams)+1)
-	general := streamToJSON(report.General)
+	general := orderedJSONTrack(report.General)
 	if report.Ref != "" {
 		general["@ref"] = report.Ref
 	}
