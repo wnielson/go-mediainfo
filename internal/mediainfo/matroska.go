@@ -18,6 +18,7 @@ const (
 	mkvIDDefaultDuration = 0x23E383
 	mkvIDTrackVideo      = 0xE0
 	mkvIDTrackAudio      = 0xE1
+	mkvIDBitRate         = 0x6264
 	mkvIDPixelWidth      = 0xB0
 	mkvIDPixelHeight     = 0xBA
 	mkvIDSamplingRate    = 0xB5
@@ -193,6 +194,7 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 	var audioChannels uint64
 	var audioSampleRate float64
 	var defaultDuration uint64
+	var bitRate uint64
 	for pos < len(buf) {
 		id, idLen, ok := readVintID(buf, pos)
 		if !ok {
@@ -214,6 +216,11 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 		}
 		if id == mkvIDCodecID {
 			codecID = string(buf[dataStart:dataEnd])
+		}
+		if id == mkvIDBitRate {
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				bitRate = value
+			}
 		}
 		if id == mkvIDDefaultDuration {
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
@@ -256,6 +263,9 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 			rate := 1e9 / float64(defaultDuration)
 			fields = append(fields, Field{Name: "Frame rate", Value: formatFrameRate(rate)})
 		}
+		if bitRate > 0 {
+			fields = addStreamBitrate(fields, float64(bitRate))
+		}
 	}
 	if kind == StreamAudio {
 		if audioChannels > 0 {
@@ -270,6 +280,9 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 		if defaultDuration > 0 {
 			duration := float64(defaultDuration) / 1e9
 			fields = addStreamDuration(fields, duration)
+		}
+		if bitRate > 0 {
+			fields = addStreamBitrate(fields, float64(bitRate))
 		}
 	}
 	return Stream{Kind: kind, Fields: fields}, true

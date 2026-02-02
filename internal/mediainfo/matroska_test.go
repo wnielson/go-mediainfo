@@ -23,6 +23,9 @@ func TestParseMatroskaTracks(t *testing.T) {
 	if findField(info.Tracks[0].Fields, "Frame rate") == "" {
 		t.Fatalf("missing frame rate")
 	}
+	if findField(info.Tracks[0].Fields, "Bit rate") == "" {
+		t.Fatalf("missing bit rate")
+	}
 }
 
 func buildMatroskaSample() []byte {
@@ -46,6 +49,7 @@ func buildMatroskaTracks() []byte {
 	trackEntry := buildMatroskaElement(mkvIDTrackType, []byte{0x01})
 	trackEntry = append(trackEntry, buildMatroskaElement(mkvIDCodecID, []byte("V_MPEG4/ISO/AVC"))...)
 	trackEntry = append(trackEntry, buildMatroskaElement(mkvIDDefaultDuration, encodeMatroskaUint(41708333))...)
+	trackEntry = append(trackEntry, buildMatroskaElement(mkvIDBitRate, encodeMatroskaUint(1000000))...)
 	trackEntry = append(trackEntry, buildMatroskaVideoSettings(1920, 1080)...)
 	trackEntry = buildMatroskaElement(mkvIDTrackEntry, trackEntry)
 	return buildMatroskaElement(mkvIDTracks, trackEntry)

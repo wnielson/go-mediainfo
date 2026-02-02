@@ -47,6 +47,7 @@ Owner: soup
 - Channel layout now emitted for common channel counts
 - JSON field ordering now matches CLI ordering
 - MP4 audio bitrate estimated from sample sizes + duration
+- Matroska BitRate element parsed into stream Bit rate
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
