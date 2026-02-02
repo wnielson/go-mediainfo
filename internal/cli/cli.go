@@ -52,10 +52,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		case strings.HasPrefix(normalized, "--help-"):
 			return helpTopic(normalized, program, stdout)
 		case normalized == "--info-parameters":
-			fmt.Fprintln(stderr, "Info-Parameters not implemented yet")
+			fmt.Fprintln(stdout, mediainfo.InfoParameters())
 			return exitOK
 		case normalized == "--info-canhandleurls":
-			fmt.Fprintln(stderr, "Info-CanHandleUrls not implemented yet")
+			fmt.Fprintln(stdout, mediainfo.InfoCanHandleUrls())
 			return exitOK
 		case strings.HasPrefix(normalized, "--language"):
 			if value, ok := valueAfterEqual(original); ok {
@@ -206,7 +206,7 @@ func writeLogFile(path, output string, includeBOM bool) error {
 }
 
 func runCore(opts Options, files []string) (string, int, error) {
-	if opts.Output != "" && !strings.EqualFold(opts.Output, "Text") && !strings.EqualFold(opts.Output, "JSON") && !strings.EqualFold(opts.Output, "XML") && !strings.EqualFold(opts.Output, "HTML") {
+	if opts.Output != "" && !strings.EqualFold(opts.Output, "Text") && !strings.EqualFold(opts.Output, "JSON") && !strings.EqualFold(opts.Output, "XML") && !strings.EqualFold(opts.Output, "OLDXML") && !strings.EqualFold(opts.Output, "HTML") {
 		return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
 	}
 
@@ -218,7 +218,7 @@ func runCore(opts Options, files []string) (string, int, error) {
 	if strings.EqualFold(opts.Output, "JSON") {
 		return mediainfo.RenderJSON(reports), count, nil
 	}
-	if strings.EqualFold(opts.Output, "XML") {
+	if strings.EqualFold(opts.Output, "XML") || strings.EqualFold(opts.Output, "OLDXML") {
 		return mediainfo.RenderXML(reports), count, nil
 	}
 	if strings.EqualFold(opts.Output, "HTML") {
