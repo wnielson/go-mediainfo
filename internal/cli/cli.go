@@ -253,6 +253,12 @@ func runCore(opts Options, files []string) (string, int, error) {
 	if strings.EqualFold(opts.Output, "PBCORE") || strings.EqualFold(opts.Output, "PBCORE2") {
 		return mediainfo.RenderPBCore(reports), count, nil
 	}
+	if strings.EqualFold(opts.Output, "GRAPH_SVG") {
+		return mediainfo.RenderGraphSVG(reports), count, nil
+	}
+	if strings.EqualFold(opts.Output, "GRAPH_DOT") {
+		return mediainfo.RenderGraphDOT(reports), count, nil
+	}
 	if strings.EqualFold(opts.Output, "HTML") {
 		return mediainfo.RenderHTML(reports), count, nil
 	}

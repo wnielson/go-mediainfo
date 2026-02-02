@@ -53,6 +53,7 @@ Owner: soup
 - Info-Parameters expanded to include IDs + menu group
 - Output format placeholders accepted for CSV/EBUCore/PBCore/Graph
 - CSV/EBUCore/PBCore renderers added (basic)
+- Graph DOT/SVG outputs added (empty)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
