@@ -56,6 +56,9 @@ func TestParseMP4CodecFromStsd(t *testing.T) {
 	if findField(info.Tracks[0].Fields, "Width") == "" {
 		t.Fatalf("missing width")
 	}
+	if info.Tracks[0].SampleCount == 0 || info.Tracks[0].DurationSeconds == 0 {
+		t.Fatalf("missing timing data")
+	}
 }
 
 func buildTrackWithStsd(handler, sample string) []byte {
@@ -71,11 +74,13 @@ func buildTrackWithStsd(handler, sample string) []byte {
 
 	var stbl bytes.Buffer
 	writeMP4Box(&stbl, "stsd", stsd.Bytes())
+	writeMP4Box(&stbl, "stts", buildSttsBox())
 
 	var minf bytes.Buffer
 	writeMP4Box(&minf, "stbl", stbl.Bytes())
 
 	var mdia bytes.Buffer
+	writeMP4Box(&mdia, "mdhd", buildMdhdBox())
 	payload := make([]byte, 20)
 	copy(payload[8:12], []byte(handler))
 	writeMP4Box(&mdia, "hdlr", payload)
@@ -84,4 +89,20 @@ func buildTrackWithStsd(handler, sample string) []byte {
 	var trak bytes.Buffer
 	writeMP4Box(&trak, "mdia", mdia.Bytes())
 	return trak.Bytes()
+}
+
+func buildMdhdBox() []byte {
+	payload := make([]byte, 24)
+	payload[0] = 0
+	binary.BigEndian.PutUint32(payload[12:16], 90000)
+	binary.BigEndian.PutUint32(payload[16:20], 900000)
+	return payload
+}
+
+func buildSttsBox() []byte {
+	buf := make([]byte, 16)
+	binary.BigEndian.PutUint32(buf[4:8], 1)
+	binary.BigEndian.PutUint32(buf[8:12], 300)
+	binary.BigEndian.PutUint32(buf[12:16], 3000)
+	return buf
 }

@@ -3,8 +3,9 @@ package mediainfo
 import "encoding/binary"
 
 type SampleInfo struct {
-	Format string
-	Fields []Field
+	Format      string
+	Fields      []Field
+	SampleCount uint64
 }
 
 func parseStsdForSample(buf []byte) (SampleInfo, bool) {

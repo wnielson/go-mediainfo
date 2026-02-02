@@ -45,6 +45,12 @@ func AnalyzeFile(path string) (Report, error) {
 				for _, field := range track.Fields {
 					fields = appendFieldUnique(fields, field)
 				}
+				if track.Kind == StreamVideo && track.SampleCount > 0 && track.DurationSeconds > 0 {
+					rate := float64(track.SampleCount) / track.DurationSeconds
+					if rate > 0 {
+						fields = appendFieldUnique(fields, Field{Name: "Frame rate", Value: formatFrameRate(rate)})
+					}
+				}
 				streams = append(streams, Stream{Kind: track.Kind, Fields: fields})
 			}
 		}

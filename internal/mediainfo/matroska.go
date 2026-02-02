@@ -7,21 +7,22 @@ import (
 )
 
 const (
-	mkvIDSegment       = 0x18538067
-	mkvIDInfo          = 0x1549A966
-	mkvIDTimecodeScale = 0x2AD7B1
-	mkvIDDuration      = 0x4489
-	mkvIDTracks        = 0x1654AE6B
-	mkvIDTrackEntry    = 0xAE
-	mkvIDTrackType     = 0x83
-	mkvIDCodecID       = 0x86
-	mkvIDTrackVideo    = 0xE0
-	mkvIDTrackAudio    = 0xE1
-	mkvIDPixelWidth    = 0xB0
-	mkvIDPixelHeight   = 0xBA
-	mkvIDSamplingRate  = 0xB5
-	mkvIDChannels      = 0x9F
-	mkvMaxScan         = int64(4 << 20)
+	mkvIDSegment         = 0x18538067
+	mkvIDInfo            = 0x1549A966
+	mkvIDTimecodeScale   = 0x2AD7B1
+	mkvIDDuration        = 0x4489
+	mkvIDTracks          = 0x1654AE6B
+	mkvIDTrackEntry      = 0xAE
+	mkvIDTrackType       = 0x83
+	mkvIDCodecID         = 0x86
+	mkvIDDefaultDuration = 0x23E383
+	mkvIDTrackVideo      = 0xE0
+	mkvIDTrackAudio      = 0xE1
+	mkvIDPixelWidth      = 0xB0
+	mkvIDPixelHeight     = 0xBA
+	mkvIDSamplingRate    = 0xB5
+	mkvIDChannels        = 0x9F
+	mkvMaxScan           = int64(4 << 20)
 )
 
 type MatroskaInfo struct {
@@ -191,6 +192,7 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 	var videoHeight uint64
 	var audioChannels uint64
 	var audioSampleRate float64
+	var defaultDuration uint64
 	for pos < len(buf) {
 		id, idLen, ok := readVintID(buf, pos)
 		if !ok {
@@ -212,6 +214,11 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 		}
 		if id == mkvIDCodecID {
 			codecID = string(buf[dataStart:dataEnd])
+		}
+		if id == mkvIDDefaultDuration {
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				defaultDuration = value
+			}
 		}
 		if id == mkvIDTrackVideo {
 			width, height := parseMatroskaVideo(buf[dataStart:dataEnd])
@@ -244,6 +251,10 @@ func parseMatroskaTrackEntry(buf []byte) (Stream, bool) {
 		}
 		if videoHeight > 0 {
 			fields = append(fields, Field{Name: "Height", Value: formatPixels(videoHeight)})
+		}
+		if defaultDuration > 0 {
+			rate := 1e9 / float64(defaultDuration)
+			fields = append(fields, Field{Name: "Frame rate", Value: formatFrameRate(rate)})
 		}
 	}
 	if kind == StreamAudio {

@@ -33,6 +33,8 @@ Owner: soup
 - Matroska: codec mapping via CodecID
 - MP4: parse width/height (video) and channels/sampling rate (audio) from sample entry
 - Matroska: parse track video/audio settings (pixel width/height, channels, sampling rate)
+- MP4: derive frame rate from mdhd duration + stts sample count
+- Matroska: derive frame rate from DefaultDuration
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
