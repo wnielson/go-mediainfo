@@ -15,6 +15,7 @@ Owner: soup
 - Help text copied from upstream CLI (Help.cpp)
 - Stub core: parsing not implemented yet
 - Upstream C++ tree kept untracked via root .gitignore
+- Post-parity target: MediaInfo issue #760 (DVD IFO language/runtime regression)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
