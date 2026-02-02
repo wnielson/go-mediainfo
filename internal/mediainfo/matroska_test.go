@@ -17,6 +17,9 @@ func TestParseMatroskaTracks(t *testing.T) {
 	if info.Tracks[0].Kind != StreamVideo {
 		t.Fatalf("expected video track")
 	}
+	if findField(info.Tracks[0].Fields, "Width") == "" {
+		t.Fatalf("missing width")
+	}
 }
 
 func buildMatroskaSample() []byte {
@@ -39,8 +42,29 @@ func buildMatroskaInfo() []byte {
 func buildMatroskaTracks() []byte {
 	trackEntry := buildMatroskaElement(mkvIDTrackType, []byte{0x01})
 	trackEntry = append(trackEntry, buildMatroskaElement(mkvIDCodecID, []byte("V_MPEG4/ISO/AVC"))...)
+	trackEntry = append(trackEntry, buildMatroskaVideoSettings(1920, 1080)...)
 	trackEntry = buildMatroskaElement(mkvIDTrackEntry, trackEntry)
 	return buildMatroskaElement(mkvIDTracks, trackEntry)
+}
+
+func buildMatroskaVideoSettings(width, height uint64) []byte {
+	video := []byte{}
+	video = append(video, buildMatroskaElement(mkvIDPixelWidth, encodeMatroskaUint(width))...)
+	video = append(video, buildMatroskaElement(mkvIDPixelHeight, encodeMatroskaUint(height))...)
+	return buildMatroskaElement(mkvIDTrackVideo, video)
+}
+
+func encodeMatroskaUint(value uint64) []byte {
+	if value <= 0xFF {
+		return []byte{byte(value)}
+	}
+	if value <= 0xFFFF {
+		return []byte{byte(value >> 8), byte(value)}
+	}
+	if value <= 0xFFFFFF {
+		return []byte{byte(value >> 16), byte(value >> 8), byte(value)}
+	}
+	return []byte{byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
 }
 
 func buildMatroskaElement(id uint64, payload []byte) []byte {

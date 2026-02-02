@@ -1,0 +1,30 @@
+package mediainfo
+
+import "fmt"
+
+func formatPixels(value uint64) string {
+	if value == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d pixels", value)
+}
+
+func formatChannels(value uint64) string {
+	if value == 0 {
+		return ""
+	}
+	if value == 1 {
+		return "1 channel"
+	}
+	return fmt.Sprintf("%d channels", value)
+}
+
+func formatSampleRate(rate float64) string {
+	if rate <= 0 {
+		return ""
+	}
+	if rate >= 1000 {
+		return fmt.Sprintf("%.1f kHz", rate/1000)
+	}
+	return fmt.Sprintf("%.0f Hz", rate)
+}

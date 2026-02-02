@@ -10,6 +10,7 @@ const maxMoovSize = int64(16 << 20)
 type MP4Track struct {
 	Kind   StreamKind
 	Format string
+	Fields []Field
 }
 
 type MP4Info struct {
@@ -185,7 +186,7 @@ func parseTrak(buf []byte) (MP4Track, bool) {
 func parseMdia(buf []byte) (MP4Track, bool) {
 	var offset int64
 	var handler string
-	var sampleFormat string
+	var sampleInfo SampleInfo
 	for offset+8 <= int64(len(buf)) {
 		boxSize, boxType, headerSize := readMP4BoxHeaderFrom(buf, offset)
 		if boxSize <= 0 {
@@ -198,8 +199,8 @@ func parseMdia(buf []byte) (MP4Track, bool) {
 		}
 		if boxType == "minf" {
 			payload := sliceBox(buf, dataOffset, boxSize-headerSize)
-			if format := parseMinfSample(payload); format != "" {
-				sampleFormat = format
+			if info, ok := parseMinfSample(payload); ok {
+				sampleInfo = info
 			}
 		}
 		offset += boxSize
@@ -211,10 +212,10 @@ func parseMdia(buf []byte) (MP4Track, bool) {
 	if kind == "" {
 		return MP4Track{}, false
 	}
-	if sampleFormat != "" {
-		format = sampleFormat
+	if sampleInfo.Format != "" {
+		format = sampleInfo.Format
 	}
-	return MP4Track{Kind: kind, Format: format}, true
+	return MP4Track{Kind: kind, Format: format, Fields: sampleInfo.Fields}, true
 }
 
 func parseHdlr(payload []byte) string {
@@ -237,7 +238,7 @@ func mapHandlerType(handler string) (StreamKind, string) {
 	}
 }
 
-func parseMinfSample(buf []byte) string {
+func parseMinfSample(buf []byte) (SampleInfo, bool) {
 	var offset int64
 	for offset+8 <= int64(len(buf)) {
 		boxSize, boxType, headerSize := readMP4BoxHeaderFrom(buf, offset)
@@ -247,16 +248,16 @@ func parseMinfSample(buf []byte) string {
 		dataOffset := offset + headerSize
 		if boxType == "stbl" {
 			payload := sliceBox(buf, dataOffset, boxSize-headerSize)
-			if format := parseStbl(payload); format != "" {
-				return format
+			if info, ok := parseStbl(payload); ok {
+				return info, true
 			}
 		}
 		offset += boxSize
 	}
-	return ""
+	return SampleInfo{}, false
 }
 
-func parseStbl(buf []byte) string {
+func parseStbl(buf []byte) (SampleInfo, bool) {
 	var offset int64
 	for offset+8 <= int64(len(buf)) {
 		boxSize, boxType, headerSize := readMP4BoxHeaderFrom(buf, offset)
@@ -266,11 +267,11 @@ func parseStbl(buf []byte) string {
 		dataOffset := offset + headerSize
 		if boxType == "stsd" {
 			payload := sliceBox(buf, dataOffset, boxSize-headerSize)
-			if format := parseStsdForFormat(payload); format != "" {
-				return format
+			if info, ok := parseStsdForSample(payload); ok {
+				return info, true
 			}
 		}
 		offset += boxSize
 	}
-	return ""
+	return SampleInfo{}, false
 }

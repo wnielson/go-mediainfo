@@ -53,15 +53,20 @@ func TestParseMP4CodecFromStsd(t *testing.T) {
 	if info.Tracks[0].Format != "AVC" {
 		t.Fatalf("format=%q", info.Tracks[0].Format)
 	}
+	if findField(info.Tracks[0].Fields, "Width") == "" {
+		t.Fatalf("missing width")
+	}
 }
 
 func buildTrackWithStsd(handler, sample string) []byte {
 	var stsd bytes.Buffer
 	stsd.Write([]byte{0x00, 0x00, 0x00, 0x00})
 	binary.Write(&stsd, binary.BigEndian, uint32(1))
-	entry := make([]byte, 16)
-	binary.BigEndian.PutUint32(entry[0:4], uint32(16))
+	entry := make([]byte, 86)
+	binary.BigEndian.PutUint32(entry[0:4], uint32(len(entry)))
 	copy(entry[4:8], []byte(sample))
+	binary.BigEndian.PutUint16(entry[32:34], 1920)
+	binary.BigEndian.PutUint16(entry[34:36], 1080)
 	stsd.Write(entry)
 
 	var stbl bytes.Buffer

@@ -38,10 +38,14 @@ func AnalyzeFile(path string) (Report, error) {
 		if parsed, ok := ParseMP4(file, stat.Size()); ok {
 			info = parsed.Container
 			for _, track := range parsed.Tracks {
-				streams = append(streams, Stream{
-					Kind:   track.Kind,
-					Fields: []Field{{Name: "Format", Value: track.Format}},
-				})
+				fields := []Field{}
+				if track.Format != "" {
+					fields = appendFieldUnique(fields, Field{Name: "Format", Value: track.Format})
+				}
+				for _, field := range track.Fields {
+					fields = appendFieldUnique(fields, field)
+				}
+				streams = append(streams, Stream{Kind: track.Kind, Fields: fields})
 			}
 		}
 	case "Matroska":
