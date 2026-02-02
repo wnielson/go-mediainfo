@@ -206,8 +206,31 @@ func writeLogFile(path, output string, includeBOM bool) error {
 }
 
 func runCore(opts Options, files []string) (string, int, error) {
-	if opts.Output != "" && !strings.EqualFold(opts.Output, "Text") && !strings.EqualFold(opts.Output, "JSON") && !strings.EqualFold(opts.Output, "XML") && !strings.EqualFold(opts.Output, "OLDXML") && !strings.EqualFold(opts.Output, "HTML") {
-		return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
+	if opts.Output != "" {
+		if strings.Contains(opts.Output, ";") || strings.HasPrefix(strings.ToLower(opts.Output), "file://") {
+			return "", 0, fmt.Errorf("output template not implemented: %s", opts.Output)
+		}
+		outputName := strings.ToUpper(strings.TrimSpace(opts.Output))
+		known := map[string]bool{
+			"TEXT":         true,
+			"JSON":         true,
+			"XML":          true,
+			"OLDXML":       true,
+			"HTML":         true,
+			"CSV":          true,
+			"EBUCORE":      true,
+			"EBUCORE_JSON": true,
+			"PBCORE":       true,
+			"PBCORE2":      true,
+			"GRAPH_SVG":    true,
+			"GRAPH_DOT":    true,
+		}
+		if !known[outputName] {
+			return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
+		}
+		if outputName != "TEXT" && outputName != "JSON" && outputName != "XML" && outputName != "OLDXML" && outputName != "HTML" {
+			return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
+		}
 	}
 
 	reports, count, err := mediainfo.AnalyzeFiles(files)

@@ -50,6 +50,8 @@ Owner: soup
 - Matroska BitRate element parsed into stream Bit rate
 - XML/HTML output renderers added (basic)
 - --info-parameters / --info-canhandleurls now implemented (basic)
+- Info-Parameters expanded to include IDs + menu group
+- Output format placeholders accepted for CSV/EBUCore/PBCore/Graph
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
