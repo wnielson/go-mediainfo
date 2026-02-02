@@ -19,6 +19,9 @@ Owner: soup
 - `--output` without "=" treated as filename (matches upstream)
 - `--` alone is a no-op (ignored)
 - `--help` prints version line then usage
+- Core analyzer implemented (General stream only): format sniff + file size
+- Text output aligns with MediaInfo-style label/value columns
+- JSON output implemented (minimal MediaInfo-like shape)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

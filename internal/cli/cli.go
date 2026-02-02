@@ -1,13 +1,14 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/autobrr/go-mediainfo/internal/mediainfo"
 )
 
 const (
@@ -205,7 +206,17 @@ func writeLogFile(path, output string, includeBOM bool) error {
 }
 
 func runCore(opts Options, files []string) (string, int, error) {
-	_ = opts
-	_ = files
-	return "", 0, errors.New("media parsing not implemented yet")
+	if opts.Output != "" && !strings.EqualFold(opts.Output, "Text") && !strings.EqualFold(opts.Output, "JSON") {
+		return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
+	}
+
+	reports, count, err := mediainfo.AnalyzeFiles(files)
+	if err != nil {
+		return "", 0, err
+	}
+
+	if strings.EqualFold(opts.Output, "JSON") {
+		return mediainfo.RenderJSON(reports), count, nil
+	}
+	return mediainfo.RenderText(reports), count, nil
 }
