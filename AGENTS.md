@@ -55,6 +55,7 @@ Owner: soup
 - CSV/EBUCore/PBCore renderers added (basic)
 - Graph DOT/SVG outputs added (empty)
 - CSV/XML/HTML now include stream numbering titles
+- XML field names sanitized for valid tags (spaces -> _)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

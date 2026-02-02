@@ -52,7 +52,7 @@ func buildXMLTrack(title string, stream Stream) xmlTrack {
 	fields := orderFieldsForJSON(stream.Kind, stream.Fields)
 	xmlFields := make([]xmlField, 0, len(fields))
 	for _, field := range fields {
-		xmlFields = append(xmlFields, xmlField{XMLName: xml.Name{Local: field.Name}, Value: field.Value})
+		xmlFields = append(xmlFields, xmlField{XMLName: xml.Name{Local: xmlFieldName(field.Name)}, Value: field.Value})
 	}
 	return xmlTrack{Type: title, Fields: xmlFields}
 }
