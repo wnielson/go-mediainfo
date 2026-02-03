@@ -703,7 +703,9 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				if avg, min, max, ok := st.ac3Info.dialnormStats(); ok {
 					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Average", Val: fmt.Sprintf("%d", avg)})
 					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Minimum", Val: fmt.Sprintf("%d", min)})
-					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Maximum", Val: fmt.Sprintf("%d", max)})
+					if max != min {
+						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Maximum", Val: fmt.Sprintf("%d", max)})
+					}
 				}
 				if avg, min, max, count, ok := st.ac3Info.comprStats(); ok {
 					extraFields = append(extraFields, jsonKV{Key: "compr_Average", Val: fmt.Sprintf("%.2f", avg)})

@@ -63,7 +63,7 @@ Owner: soup
 - Graph DOT/SVG outputs added (empty)
 - CSV/XML/HTML now include stream numbering titles
 - CSV output uses section headers (no header row), no CSV quoting, blank line between sections, 2 trailing blank lines
-- AC-3 stats: emit dialnorm_Maximum even when equal to Minimum
+- AC-3 stats: text/CSV emit dialnorm_Maximum even when equal to Minimum; JSON extra only when distinct
 - formatBytes for <1 KiB uses "Bytes" (not "B")
 - XML field names sanitized for valid tags (spaces -> _)
 - Upstream build needs autoconf/automake/libtool/pkg-config; use PATH "/opt/homebrew/opt/libtool/libexec/gnubin" for glibtoolize
