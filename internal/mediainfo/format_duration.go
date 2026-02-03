@@ -38,6 +38,13 @@ func formatBitrate(bitsPerSecond float64) string {
 	return fmt.Sprintf("%s kb/s", formatThousands(kbps))
 }
 
+func formatBitrateKbps(kbps int64) string {
+	if kbps <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s kb/s", formatThousands(kbps))
+}
+
 func formatThousands(value int64) string {
 	if value < 1000 {
 		return fmt.Sprintf("%d", value)

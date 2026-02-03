@@ -78,6 +78,7 @@ Owner: soup
 - MPEG-TS: audio ADTS parsing needs int-cast shifts + next-sync validation; duration uses integer ms floor
 - Text output: label column width 41 + ends with 2 blank lines (Fprintln adds 1) to match CLI
 - AVI: parse RIFF hdrl/strl/movi + INFO/ISFT; MPEG-4 Visual VOL/user data for profile/BVOP/QPel/GMC/Matrix; frame rate ratio for stream, simple rate for general
+- MPEG-PS/VOB: parse PES + MPEG-2 sequence/extension/GOP/picture headers for profile/Matrix/GOP/timecode/BVOP; duration uses PTS span + 2 frames; stream bitrate uses floored kbps for CLI parity
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

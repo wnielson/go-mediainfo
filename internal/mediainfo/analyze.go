@@ -267,6 +267,13 @@ func AnalyzeFile(path string) (Report, error) {
 			continue
 		}
 		if rate := findField(stream.Fields, "Frame rate"); rate != "" {
+			if format == "MPEG-PS" && strings.Contains(rate, "(") {
+				parts := strings.Fields(rate)
+				if len(parts) > 0 {
+					general.Fields = appendFieldUnique(general.Fields, Field{Name: "Frame rate", Value: fmt.Sprintf("%s FPS", parts[0])})
+					break
+				}
+			}
 			general.Fields = appendFieldUnique(general.Fields, Field{Name: "Frame rate", Value: rate})
 			break
 		}
