@@ -17,6 +17,7 @@ Owner: soup
 - Upstream C++ tree kept untracked via root .gitignore
 - Post-parity target: MediaInfo issue #760 (DVD IFO language/runtime regression)
 - Issue #760 notes: IFO in VIDEO_TS shows VOB-derived streams but loses audio language; same IFO copied elsewhere shows languages; BUP files show old IFO-style info
+- Issue #760: dev snapshots fixed duration, language issue persists when IFO is inside VIDEO_TS; still reported broken in 23.07+
 - `--output` without "=" treated as filename (matches upstream)
 - `--` alone is a no-op (ignored)
 - `--help` prints version line then usage
@@ -61,6 +62,9 @@ Owner: soup
 - CSV/EBUCore/PBCore renderers added (basic)
 - Graph DOT/SVG outputs added (empty)
 - CSV/XML/HTML now include stream numbering titles
+- CSV output uses section headers (no header row), no CSV quoting, blank line between sections, 2 trailing blank lines
+- AC-3 stats: emit dialnorm_Maximum even when equal to Minimum
+- formatBytes for <1 KiB uses "Bytes" (not "B")
 - XML field names sanitized for valid tags (spaces -> _)
 - Upstream build needs autoconf/automake/libtool/pkg-config; use PATH "/opt/homebrew/opt/libtool/libexec/gnubin" for glibtoolize
 - Built CLI binary at `~/github/oss/mediainfo-build/MediaInfo/Project/GNU/CLI/mediainfo`
