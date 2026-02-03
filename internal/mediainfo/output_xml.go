@@ -2,57 +2,211 @@ package mediainfo
 
 import (
 	"bytes"
-	"encoding/xml"
+	"encoding/json"
+	"fmt"
+	"strings"
 )
 
-type xmlMedia struct {
-	XMLName xml.Name    `xml:"MediaInfo"`
-	Media   []xmlReport `xml:"media"`
+const (
+	mediaInfoXMLNS      = "https://mediaarea.net/mediainfo"
+	mediaInfoXMLSchema  = "https://mediaarea.net/mediainfo/mediainfo_2_0.xsd"
+	mediaInfoXMLVersion = "2.0"
+)
+
+type orderedValueKind int
+
+const (
+	orderedString orderedValueKind = iota
+	orderedObject
+	orderedArray
+)
+
+type orderedValue struct {
+	kind orderedValueKind
+	str  string
+	obj  []orderedKV
+	arr  []orderedValue
 }
 
-type xmlReport struct {
-	Ref   string     `xml:"ref,attr,omitempty"`
-	Track []xmlTrack `xml:"track"`
-}
-
-type xmlTrack struct {
-	Type   string     `xml:"type,attr"`
-	Fields []xmlField `xml:",any"`
-}
-
-type xmlField struct {
-	XMLName xml.Name
-	Value   string `xml:",chardata"`
+type orderedKV struct {
+	key string
+	val orderedValue
 }
 
 func RenderXML(reports []Report) string {
-	media := xmlMedia{}
-	for _, report := range reports {
-		media.Media = append(media.Media, buildXMLReport(report))
-	}
-
 	var buf bytes.Buffer
-	buf.WriteString(xml.Header)
-	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
-	_ = enc.Encode(media)
+	buf.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+	buf.WriteString("<MediaInfo\n")
+	buf.WriteString(fmt.Sprintf("    xmlns=\"%s\"\n", mediaInfoXMLNS))
+	buf.WriteString("    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n")
+	buf.WriteString(fmt.Sprintf("    xsi:schemaLocation=\"%s %s\"\n", mediaInfoXMLNS, mediaInfoXMLSchema))
+	buf.WriteString(fmt.Sprintf("    version=\"%s\">\n", mediaInfoXMLVersion))
+	buf.WriteString(fmt.Sprintf("<creatingLibrary version=\"%s\" url=\"%s\">MediaInfoLib</creatingLibrary>\n", MediaInfoLibVersion, MediaInfoLibURL))
+
+	for _, report := range reports {
+		buf.WriteString(renderXMLMedia(report))
+	}
+	buf.WriteString("</MediaInfo>\n")
 	return buf.String()
 }
 
-func buildXMLReport(report Report) xmlReport {
-	tracks := make([]xmlTrack, 0, len(report.Streams)+1)
-	tracks = append(tracks, buildXMLTrack("General", report.General))
-	for _, entry := range enumerateStreams(report.Streams) {
-		tracks = append(tracks, buildXMLTrack(entry.Title, entry.Stream))
+func renderXMLMedia(report Report) string {
+	var buf bytes.Buffer
+	buf.WriteString("<media")
+	if report.Ref != "" {
+		buf.WriteString(fmt.Sprintf(" ref=\"%s\"", xmlEscapeAttr(report.Ref)))
 	}
-	return xmlReport{Ref: report.Ref, Track: tracks}
+	buf.WriteString(">\n")
+
+	buf.WriteString(renderXMLTrack("General", buildJSONGeneralFields(report)))
+
+	sorted := orderTracks(report.Streams)
+	for i, stream := range sorted {
+		fields := buildJSONStreamFields(stream, i)
+		buf.WriteString(renderXMLTrack(string(stream.Kind), fields))
+	}
+
+	buf.WriteString("</media>\n")
+	return buf.String()
 }
 
-func buildXMLTrack(title string, stream Stream) xmlTrack {
-	fields := orderFieldsForJSON(stream.Kind, stream.Fields)
-	xmlFields := make([]xmlField, 0, len(fields))
+func renderXMLTrack(trackType string, fields []jsonKV) string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("<track type=\"%s\">\n", xmlEscapeAttr(trackType)))
 	for _, field := range fields {
-		xmlFields = append(xmlFields, xmlField{XMLName: xml.Name{Local: xmlFieldName(field.Name)}, Value: field.Value})
+		if field.Key == "@type" {
+			continue
+		}
+		if field.Key == "extra" {
+			buf.WriteString(renderXMLExtra(field.Val))
+			continue
+		}
+		buf.WriteString(renderXMLField(field.Key, field.Val))
 	}
-	return xmlTrack{Type: title, Fields: xmlFields}
+	buf.WriteString("</track>\n")
+	return buf.String()
+}
+
+func renderXMLField(key, value string) string {
+	name := xmlFieldName(key)
+	return fmt.Sprintf("<%s>%s</%s>\n", name, xmlEscape(value), name)
+}
+
+func renderXMLExtra(raw string) string {
+	value, err := parseOrderedJSON(raw)
+	if err != nil || value.kind != orderedObject {
+		return renderXMLField("extra", raw)
+	}
+	var buf bytes.Buffer
+	buf.WriteString("<extra>\n")
+	for _, kv := range value.obj {
+		buf.WriteString(renderOrderedXML(kv.key, kv.val))
+	}
+	buf.WriteString("</extra>\n")
+	return buf.String()
+}
+
+func renderOrderedXML(key string, value orderedValue) string {
+	name := xmlFieldName(key)
+	switch value.kind {
+	case orderedString:
+		return fmt.Sprintf("<%s>%s</%s>\n", name, xmlEscape(value.str), name)
+	case orderedObject:
+		var buf bytes.Buffer
+		buf.WriteString(fmt.Sprintf("<%s>\n", name))
+		for _, kv := range value.obj {
+			buf.WriteString(renderOrderedXML(kv.key, kv.val))
+		}
+		buf.WriteString(fmt.Sprintf("</%s>\n", name))
+		return buf.String()
+	case orderedArray:
+		var buf bytes.Buffer
+		buf.WriteString(fmt.Sprintf("<%s>\n", name))
+		for _, item := range value.arr {
+			if item.kind == orderedObject {
+				for _, kv := range item.obj {
+					buf.WriteString(renderOrderedXML(kv.key, kv.val))
+				}
+			} else if item.kind == orderedString {
+				buf.WriteString(xmlEscape(item.str))
+			}
+		}
+		buf.WriteString(fmt.Sprintf("</%s>\n", name))
+		return buf.String()
+	default:
+		return fmt.Sprintf("<%s>%s</%s>\n", name, xmlEscape(value.str), name)
+	}
+}
+
+func parseOrderedJSON(value string) (orderedValue, error) {
+	dec := json.NewDecoder(strings.NewReader(value))
+	dec.UseNumber()
+	return parseOrderedValue(dec)
+}
+
+func parseOrderedValue(dec *json.Decoder) (orderedValue, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return orderedValue{}, err
+	}
+	switch t := tok.(type) {
+	case json.Delim:
+		switch t {
+		case '{':
+			var kvs []orderedKV
+			for dec.More() {
+				keyTok, err := dec.Token()
+				if err != nil {
+					return orderedValue{}, err
+				}
+				key, _ := keyTok.(string)
+				val, err := parseOrderedValue(dec)
+				if err != nil {
+					return orderedValue{}, err
+				}
+				kvs = append(kvs, orderedKV{key: key, val: val})
+			}
+			if _, err := dec.Token(); err != nil {
+				return orderedValue{}, err
+			}
+			return orderedValue{kind: orderedObject, obj: kvs}, nil
+		case '[':
+			var arr []orderedValue
+			for dec.More() {
+				val, err := parseOrderedValue(dec)
+				if err != nil {
+					return orderedValue{}, err
+				}
+				arr = append(arr, val)
+			}
+			if _, err := dec.Token(); err != nil {
+				return orderedValue{}, err
+			}
+			return orderedValue{kind: orderedArray, arr: arr}, nil
+		}
+	case string:
+		return orderedValue{kind: orderedString, str: t}, nil
+	case json.Number:
+		return orderedValue{kind: orderedString, str: t.String()}, nil
+	case bool:
+		if t {
+			return orderedValue{kind: orderedString, str: "true"}, nil
+		}
+		return orderedValue{kind: orderedString, str: "false"}, nil
+	case nil:
+		return orderedValue{kind: orderedString, str: ""}, nil
+	}
+	return orderedValue{kind: orderedString, str: fmt.Sprint(tok)}, nil
+}
+
+func xmlEscape(value string) string {
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
+	value = strings.ReplaceAll(value, "\"", "&quot;")
+	return value
+}
+
+func xmlEscapeAttr(value string) string {
+	return xmlEscape(value)
 }
