@@ -31,6 +31,7 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 	videoParsers := map[uint16]*mpeg2VideoParser{}
 	var videoPTS ptsTracker
 	var anyPTS ptsTracker
+	packetOrder := 0
 
 	for i := 0; i+4 <= len(data); {
 		if data[i] != 0x00 || data[i+1] != 0x00 || data[i+2] != 0x01 {
@@ -68,9 +69,13 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 					key := psStreamKey(streamID, psSubstreamNone)
 					entry, exists := streams[key]
 					if !exists {
-						entry = &psStream{id: streamID, subID: psSubstreamNone, kind: kind, format: format}
+						entry = &psStream{id: streamID, subID: psSubstreamNone, kind: kind, format: format, firstPacketOrder: -1}
 						streams[key] = entry
 						streamOrder = append(streamOrder, key)
+					}
+					if entry.kind != StreamMenu && entry.firstPacketOrder < 0 {
+						entry.firstPacketOrder = packetOrder
+						packetOrder++
 					}
 					if payloadStart < payloadEnd {
 						entry.bytes += uint64(payloadEnd - payloadStart)
@@ -147,9 +152,13 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 		key := psStreamKey(streamID, subID)
 		entry, exists := streams[key]
 		if !exists {
-			entry = &psStream{id: streamID, subID: subID, kind: kind, format: format}
+			entry = &psStream{id: streamID, subID: subID, kind: kind, format: format, firstPacketOrder: -1}
 			streams[key] = entry
 			streamOrder = append(streamOrder, key)
+		}
+		if entry.kind != StreamMenu && entry.firstPacketOrder < 0 {
+			entry.firstPacketOrder = packetOrder
+			packetOrder++
 		}
 
 		if (flags&0x80) != 0 && i+9+headerLen <= len(data) {
@@ -228,6 +237,18 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 		st := streams[key]
 		if st == nil {
 			continue
+		}
+		jsonExtras := map[string]string{}
+		jsonRaw := map[string]string{}
+		if st.firstPacketOrder >= 0 && st.kind != StreamMenu {
+			jsonExtras["FirstPacketOrder"] = fmt.Sprintf("%d", st.firstPacketOrder)
+		}
+		if st.kind != StreamMenu {
+			if st.subID != psSubstreamNone {
+				jsonExtras["ID"] = fmt.Sprintf("%d-%d", st.id, st.subID)
+			} else {
+				jsonExtras["ID"] = fmt.Sprintf("%d", st.id)
+			}
 		}
 		info := mpeg2VideoInfo{}
 		if st.kind == StreamVideo && !st.videoIsH264 {
@@ -477,6 +498,30 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 					fields = append(fields, Field{Name: "Stream size", Value: streamSize})
 				}
 			}
+			streamBytes := int64(effectiveBytes)
+			if streamBytes > 0 {
+				jsonExtras["StreamSize"] = fmt.Sprintf("%d", streamBytes)
+			}
+			jsonDuration := math.Round(duration*1000) / 1000
+			jsonBitrateDuration := duration
+			if jsonBitrateDuration <= 0 {
+				jsonBitrateDuration = jsonDuration
+			}
+			if jsonBitrateDuration > 0 && streamBytes > 0 {
+				jsonBitrate := (float64(streamBytes) * 8) / jsonBitrateDuration
+				jsonExtras["BitRate"] = fmt.Sprintf("%d", int64(math.Round(jsonBitrate)))
+			} else if bitrate > 0 {
+				jsonExtras["BitRate"] = fmt.Sprintf("%d", int64(math.Round(bitrate)))
+			}
+			if info.MatrixData != "" {
+				jsonExtras["Format_Settings_Matrix_Data"] = info.MatrixData
+			}
+			if info.BufferSize > 0 {
+				jsonExtras["BufferSize"] = fmt.Sprintf("%d", info.BufferSize)
+			}
+			if info.IntraDCPrecision > 0 {
+				jsonRaw["extra"] = renderJSONObject([]jsonKV{{Key: "intra_dc_precision", Val: fmt.Sprintf("%d", info.IntraDCPrecision)}}, false)
+			}
 		} else if st.kind == StreamAudio {
 			duration := st.pts.duration()
 			if st.audioProfile != "" {
@@ -486,7 +531,11 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 			} else if st.audioRate > 0 && st.audioFrames > 0 {
 				rate := int64(st.audioRate)
 				if rate > 0 {
-					samples := st.audioFrames * 1024
+					spf := uint64(1024)
+					if st.hasAC3 && st.ac3Info.spf > 0 {
+						spf = uint64(st.ac3Info.spf)
+					}
+					samples := st.audioFrames * spf
 					durationMs := int64((samples * 1000) / uint64(rate))
 					duration = float64(durationMs) / 1000.0
 				}
@@ -542,7 +591,9 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				if avg, min, max, ok := st.ac3Info.dialnormStats(); ok {
 					fields = append(fields, Field{Name: "dialnorm_Average", Value: fmt.Sprintf("%d dB", avg)})
 					fields = append(fields, Field{Name: "dialnorm_Minimum", Value: fmt.Sprintf("%d dB", min)})
-					fields = append(fields, Field{Name: "dialnorm_Maximum", Value: fmt.Sprintf("%d dB", max)})
+					if max != min {
+						fields = append(fields, Field{Name: "dialnorm_Maximum", Value: fmt.Sprintf("%d dB", max)})
+					}
 				}
 			} else if st.audioRate > 0 {
 				fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
@@ -573,12 +624,112 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 					fields = append(fields, Field{Name: "Delay relative to video", Value: formatDelayMs(int64(math.Round(delay)))})
 				}
 			}
+			if st.hasAC3 {
+				if duration > 0 {
+					jsonExtras["Duration"] = fmt.Sprintf("%.3f", duration)
+				}
+				if st.ac3Info.spf > 0 {
+					jsonExtras["SamplesPerFrame"] = fmt.Sprintf("%d", st.ac3Info.spf)
+				}
+				if st.ac3Info.sampleRate > 0 {
+					if st.audioFrames > 0 && st.ac3Info.spf > 0 {
+						samplingCount := int64(st.audioFrames) * int64(st.ac3Info.spf)
+						jsonExtras["SamplingCount"] = fmt.Sprintf("%d", samplingCount)
+						jsonExtras["FrameCount"] = fmt.Sprintf("%d", st.audioFrames)
+					} else if duration > 0 {
+						samplingCount := int64(math.Round(duration * st.ac3Info.sampleRate))
+						jsonExtras["SamplingCount"] = fmt.Sprintf("%d", samplingCount)
+						if st.ac3Info.spf > 0 {
+							frameCount := int64(math.Round(float64(samplingCount) / float64(st.ac3Info.spf)))
+							jsonExtras["FrameCount"] = fmt.Sprintf("%d", frameCount)
+						}
+					}
+				}
+				if st.ac3Info.bitRateKbps > 0 && duration > 0 {
+					streamSizeBytes := int64(math.Round(float64(st.ac3Info.bitRateKbps*1000) * duration / 8.0))
+					if streamSizeBytes > 0 {
+						jsonExtras["StreamSize"] = fmt.Sprintf("%d", streamSizeBytes)
+					}
+				}
+				jsonExtras["Format_Settings_Endianness"] = "Big"
+				if code := ac3ServiceKindCode(st.ac3Info.bsmod); code != "" {
+					jsonExtras["ServiceKind"] = code
+				}
+				extraFields := []jsonKV{}
+				if st.ac3Info.bsid > 0 {
+					extraFields = append(extraFields, jsonKV{Key: "bsid", Val: fmt.Sprintf("%d", st.ac3Info.bsid)})
+				}
+				if st.ac3Info.hasDialnorm {
+					extraFields = append(extraFields, jsonKV{Key: "dialnorm", Val: fmt.Sprintf("%d", st.ac3Info.dialnorm)})
+				}
+				if st.ac3Info.hasCompr {
+					extraFields = append(extraFields, jsonKV{Key: "compr", Val: fmt.Sprintf("%.2f", st.ac3Info.comprDB)})
+				}
+				if st.ac3Info.acmod > 0 {
+					extraFields = append(extraFields, jsonKV{Key: "acmod", Val: fmt.Sprintf("%d", st.ac3Info.acmod)})
+				}
+				if st.ac3Info.lfeon >= 0 {
+					extraFields = append(extraFields, jsonKV{Key: "lfeon", Val: fmt.Sprintf("%d", st.ac3Info.lfeon)})
+				}
+				if st.ac3Info.hasCmixlev {
+					extraFields = append(extraFields, jsonKV{Key: "cmixlev", Val: fmt.Sprintf("%.1f", st.ac3Info.cmixlevDB)})
+				}
+				if st.ac3Info.hasSurmixlev {
+					extraFields = append(extraFields, jsonKV{Key: "surmixlev", Val: fmt.Sprintf("%.0f dB", st.ac3Info.surmixlevDB)})
+				}
+				if st.ac3Info.hasMixlevel {
+					extraFields = append(extraFields, jsonKV{Key: "mixlevel", Val: fmt.Sprintf("%d", st.ac3Info.mixlevel)})
+				}
+				if st.ac3Info.hasRoomtyp {
+					extraFields = append(extraFields, jsonKV{Key: "roomtyp", Val: st.ac3Info.roomtyp})
+				}
+				if avg, min, max, ok := st.ac3Info.dialnormStats(); ok {
+					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Average", Val: fmt.Sprintf("%d", avg)})
+					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Minimum", Val: fmt.Sprintf("%d", min)})
+					if max != min {
+						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Maximum", Val: fmt.Sprintf("%d", max)})
+					}
+				}
+				if avg, min, max, count, ok := st.ac3Info.comprStats(); ok {
+					extraFields = append(extraFields, jsonKV{Key: "compr_Average", Val: fmt.Sprintf("%.2f", avg)})
+					extraFields = append(extraFields, jsonKV{Key: "compr_Minimum", Val: fmt.Sprintf("%.2f", min)})
+					extraFields = append(extraFields, jsonKV{Key: "compr_Maximum", Val: fmt.Sprintf("%.2f", max)})
+					extraFields = append(extraFields, jsonKV{Key: "compr_Count", Val: fmt.Sprintf("%d", count)})
+				}
+				if avg, min, max, count, ok := st.ac3Info.dynrngStats(); ok {
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Average", Val: fmt.Sprintf("%.2f", avg)})
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Minimum", Val: fmt.Sprintf("%.2f", min)})
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Maximum", Val: fmt.Sprintf("%.2f", max)})
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Count", Val: fmt.Sprintf("%d", count)})
+				}
+				if len(extraFields) > 0 {
+					jsonRaw["extra"] = renderJSONObject(extraFields, false)
+				}
+			}
 		} else if st.kind != StreamVideo {
 			if duration := st.pts.duration(); duration > 0 {
 				fields = addStreamDuration(fields, duration)
 			}
 		}
-		streamsOut = append(streamsOut, Stream{Kind: st.kind, Fields: fields})
+		if st.kind == StreamVideo && st.pts.has() {
+			delay := float64(st.pts.min) / 90000.0
+			jsonExtras["Delay"] = fmt.Sprintf("%.9f", delay)
+			jsonExtras["Delay_DropFrame"] = "No"
+			jsonExtras["Delay_Source"] = "Container"
+			jsonExtras["Delay_Original"] = "0.000"
+			jsonExtras["Delay_Original_DropFrame"] = "No"
+			jsonExtras["Delay_Original_Source"] = "Stream"
+		}
+		if st.kind == StreamAudio && st.pts.has() {
+			delay := float64(st.pts.min) / 90000.0
+			jsonExtras["Delay"] = fmt.Sprintf("%.9f", delay)
+			jsonExtras["Delay_Source"] = "Container"
+			if videoPTS.has() {
+				videoDelay := float64(int64(st.pts.min)-int64(videoPTS.min)) / 90000.0
+				jsonExtras["Video_Delay"] = fmt.Sprintf("%.3f", videoDelay)
+			}
+		}
+		streamsOut = append(streamsOut, Stream{Kind: st.kind, Fields: fields, JSON: jsonExtras, JSONRaw: jsonRaw})
 	}
 
 	info := ContainerInfo{}
@@ -638,7 +789,11 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 			} else if st.audioRate > 0 && st.audioFrames > 0 {
 				rate := int64(st.audioRate)
 				if rate > 0 {
-					samples := st.audioFrames * 1024
+					spf := uint64(1024)
+					if st.hasAC3 && st.ac3Info.spf > 0 {
+						spf = uint64(st.ac3Info.spf)
+					}
+					samples := st.audioFrames * spf
 					durationMs := int64((samples * 1000) / uint64(rate))
 					duration = float64(durationMs) / 1000.0
 				}
@@ -738,6 +893,10 @@ func consumeAC3PS(entry *psStream, payload []byte) {
 		}
 		entry.ac3Info.mergeFrame(frameInfo)
 		entry.hasAC3 = true
+		entry.audioFrames++
+		if entry.audioRate == 0 && frameInfo.sampleRate > 0 {
+			entry.audioRate = frameInfo.sampleRate
+		}
 		i += frameSize
 	}
 	if i > 0 {

@@ -16,6 +16,7 @@ Owner: soup
 - Stub core: parsing not implemented yet
 - Upstream C++ tree kept untracked via root .gitignore
 - Post-parity target: MediaInfo issue #760 (DVD IFO language/runtime regression)
+- Issue #760 notes: IFO in VIDEO_TS shows VOB-derived streams but loses audio language; same IFO copied elsewhere shows languages; BUP files show old IFO-style info
 - `--output` without "=" treated as filename (matches upstream)
 - `--` alone is a no-op (ignored)
 - `--help` prints version line then usage
@@ -104,6 +105,8 @@ Owner: soup
 - JSON Rotation should be injected for MP4 video only; AAC `FrameCount` only for `mp4a*` codec IDs
 - MPEG-TS JSON parity: StreamOrder `0-0`/`0-1`, IDs/MenuID decimal-only; Duration/Delay 9-decimal JSON; precision min/max = overall/9600
 - MPEG-TS Menu JSON: `List_StreamKind`/`List_StreamPos`, Service* fields, PMT `pointer_field` + `section_length` in `extra`
+- MPEG-PS JSON: FirstPacketOrder ignores Menu streams (video/audio start at 0)
+- AC-3 JSON: ServiceKind uses short codes (e.g., CM)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

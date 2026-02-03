@@ -322,6 +322,62 @@ func AnalyzeFile(path string) (Report, error) {
 		if parsedInfo, parsedStreams, ok := ParseMPEGPS(file, stat.Size()); ok {
 			info = parsedInfo
 			streams = parsedStreams
+			general.JSON = map[string]string{}
+			if info.DurationSeconds > 0 {
+				jsonDuration := math.Round(info.DurationSeconds*1000) / 1000
+				if jsonDuration > 0 {
+					overall := (float64(stat.Size()) * 8) / jsonDuration
+					general.JSON["OverallBitRate"] = fmt.Sprintf("%d", int64(math.Round(overall)))
+				}
+			}
+			var frameCount string
+			var streamSizeSum int64
+			hasAudio := false
+			for _, stream := range streams {
+				if stream.Kind == StreamAudio {
+					hasAudio = true
+					break
+				}
+			}
+			audioIndex := 0
+			for i := range streams {
+				if streams[i].Kind == StreamMenu {
+					streams[i].JSONSkipStreamOrder = true
+					continue
+				}
+				if streams[i].Kind == StreamAudio {
+					streams[i].JSON["StreamOrder"] = fmt.Sprintf("%d", audioIndex)
+					audioIndex++
+				}
+				if streams[i].Kind == StreamVideo {
+					if findField(streams[i].Fields, "Format") != "" {
+						duration, durOk := parseDurationSeconds(findField(streams[i].Fields, "Duration"))
+						fps, fpsOk := parseFPS(findField(streams[i].Fields, "Frame rate"))
+						if durOk && fpsOk {
+							frameCount = fmt.Sprintf("%d", int(math.Round(duration*fps)))
+						}
+					}
+					if hasAudio {
+						streams[i].JSONSkipStreamOrder = true
+					}
+				}
+				if streams[i].JSON != nil {
+					if value, ok := streams[i].JSON["StreamSize"]; ok {
+						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+							streamSizeSum += parsed
+						}
+					}
+				}
+			}
+			if frameCount != "" {
+				general.JSON["FrameCount"] = frameCount
+			}
+			if streamSizeSum > 0 {
+				remaining := stat.Size() - streamSizeSum
+				if remaining >= 0 {
+					general.JSON["StreamSize"] = fmt.Sprintf("%d", remaining)
+				}
+			}
 		}
 	case "MPEG Audio":
 		if parsedInfo, parsedStreams, ok := ParseMP3(file, stat.Size()); ok {
