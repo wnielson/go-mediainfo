@@ -6,6 +6,7 @@
 - Sample parity complete: MP4/MKV/TS/AVI/MPEG-PS (VOB)/MPEG Video (MPG) (text output)
 - Next targets: sample sweep (PS/TS edge cases), parity audit for JSON/XML/CSV
 - Remaining diffs: JSON/XML/CSV parity audit, broader sample sweep for edge cases
+- Implement MediaInfo JSON/XML/CSV schema parity (creatingLibrary + raw field names/values)
 
 ## Post-parity
 - Investigate MediaInfo issue #760: DVD IFO language/runtime regression (23.07 vs 23.06). https://github.com/MediaArea/MediaInfo/issues/760

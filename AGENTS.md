@@ -49,6 +49,7 @@ Owner: soup
 - MP4 audio bitrate estimated from sample sizes + duration
 - Matroska BitRate element parsed into stream Bit rate
 - XML/HTML output renderers added (basic)
+- JSON/XML/CSV outputs are not yet MediaInfo schema-compatible (currently text-like field names/values)
 - --info-parameters / --info-canhandleurls now implemented (basic)
 - Info-Parameters expanded to include IDs + menu group
 - Output format placeholders accepted for CSV/EBUCore/PBCore/Graph
