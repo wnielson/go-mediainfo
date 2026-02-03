@@ -91,6 +91,18 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			}
 		case "ID":
 			out = append(out, jsonKV{Key: "ID", Val: field.Value})
+		case "Unique ID":
+			value := strings.TrimSpace(field.Value)
+			if idx := strings.IndexAny(value, " ("); idx >= 0 {
+				value = strings.TrimSpace(value[:idx])
+			}
+			if value != "" {
+				out = append(out, jsonKV{Key: "UniqueID", Val: value})
+			}
+		case "Format version":
+			if version := extractVersionNumber(field.Value); version != "" {
+				out = append(out, jsonKV{Key: "Format_Version", Val: version})
+			}
 		case "Format settings, CABAC":
 			out = append(out, jsonKV{Key: "Format_Settings_CABAC", Val: field.Value})
 		case "Format settings, Reference frames":
@@ -191,8 +203,12 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			out = append(out, jsonKV{Key: "Compression_Mode", Val: field.Value})
 		case "Default":
 			out = append(out, jsonKV{Key: "Default", Val: field.Value})
+		case "Forced":
+			out = append(out, jsonKV{Key: "Forced", Val: field.Value})
 		case "Alternate group":
 			out = append(out, jsonKV{Key: "AlternateGroup", Val: field.Value})
+		case "ErrorDetectionType":
+			extras = append(extras, jsonKV{Key: "ErrorDetectionType", Val: field.Value})
 		}
 	}
 	if len(extras) > 0 {
@@ -208,6 +224,7 @@ func buildJSONComputedFields(kind StreamKind, fields []jsonKV) []jsonKV {
 	frameRate, _ := strconv.ParseFloat(jsonFieldValue(fields, "FrameRate"), 64)
 	sampleRate, _ := strconv.ParseFloat(jsonFieldValue(fields, "SamplingRate"), 64)
 	channels := jsonFieldValue(fields, "Channels")
+	codecID := strings.ToLower(jsonFieldValue(fields, "CodecID"))
 
 	if kind == StreamVideo && duration > 0 && frameRate > 0 {
 		if jsonFieldValue(fields, "FrameCount") == "" {
@@ -240,7 +257,7 @@ func buildJSONComputedFields(kind StreamKind, fields []jsonKV) []jsonKV {
 				samples := int(math.Round(duration * sampleRate))
 				out = append(out, jsonKV{Key: "SamplingCount", Val: strconv.Itoa(samples)})
 			}
-			if duration > 0 && sampleRate > 0 && jsonFieldValue(fields, "FrameCount") == "" {
+			if duration > 0 && sampleRate > 0 && jsonFieldValue(fields, "FrameCount") == "" && strings.HasPrefix(codecID, "mp4a") {
 				frameCount := int(math.Round(duration * sampleRate / 1024.0))
 				out = append(out, jsonKV{Key: "FrameCount", Val: strconv.Itoa(frameCount)})
 			}
@@ -270,9 +287,6 @@ func buildJSONComputedFields(kind StreamKind, fields []jsonKV) []jsonKV {
 					out = append(out, jsonKV{Key: "PixelAspectRatio", Val: formatJSONFloat(pixelAspect)})
 				}
 			}
-		}
-		if jsonFieldValue(fields, "Rotation") == "" {
-			out = append(out, jsonKV{Key: "Rotation", Val: "0.000"})
 		}
 	}
 
@@ -400,6 +414,16 @@ func splitAACFormat(value string) (string, string) {
 		return "AAC", strings.TrimSpace(strings.TrimPrefix(value, "AAC "))
 	}
 	return value, ""
+}
+
+func extractVersionNumber(value string) string {
+	tokens := strings.Fields(value)
+	for i := len(tokens) - 1; i >= 0; i-- {
+		if num := extractLeadingNumber(tokens[i]); num != "" {
+			return num
+		}
+	}
+	return extractLeadingNumber(value)
 }
 
 func splitEncodedLibrary(value string) (string, string) {

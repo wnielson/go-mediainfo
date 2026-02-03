@@ -26,7 +26,9 @@ const (
 	mkvIDTagString       = 0x4487
 	mkvIDTrackEntry      = 0xAE
 	mkvIDTrackNumber     = 0xD7
+	mkvIDTrackUID        = 0x73C5
 	mkvIDTrackType       = 0x83
+	mkvIDTrackOffset     = 0x537F
 	mkvIDCodecID         = 0x86
 	mkvIDCodecPrivate    = 0x63A2
 	mkvIDCodecName       = 0x258688
@@ -289,6 +291,9 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	pos := 0
 	var trackType uint64
 	var trackNumber uint64
+	var trackUID uint64
+	var trackOffset int64
+	var hasTrackOffset bool
 	var codecID string
 	var codecPrivate []byte
 	var codecName string
@@ -327,6 +332,11 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 				trackNumber = value
 			}
 		}
+		if id == mkvIDTrackUID {
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				trackUID = value
+			}
+		}
 		if id == mkvIDCodecID {
 			codecID = string(buf[dataStart:dataEnd])
 		}
@@ -346,6 +356,12 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
 				v := value != 0
 				flagForced = &v
+			}
+		}
+		if id == mkvIDTrackOffset {
+			if value, ok := readSigned(buf[dataStart:dataEnd]); ok {
+				trackOffset = value
+				hasTrackOffset = true
 			}
 		}
 		if id == mkvIDBitRate {
@@ -504,7 +520,51 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	} else {
 		fields = append(fields, Field{Name: "Forced", Value: "No"})
 	}
-	return Stream{Kind: kind, Fields: fields}, true
+	jsonExtras := map[string]string{}
+	if trackUID > 0 {
+		jsonExtras["UniqueID"] = fmt.Sprintf("%d", trackUID)
+	}
+	delaySeconds := 0.0
+	if hasTrackOffset {
+		delaySeconds = float64(trackOffset) / 1e9
+	}
+	if kind == StreamVideo || kind == StreamAudio {
+		delay := fmt.Sprintf("%.3f", delaySeconds)
+		jsonExtras["Delay"] = delay
+		jsonExtras["Delay_Source"] = "Container"
+		if kind == StreamAudio {
+			jsonExtras["Video_Delay"] = delay
+		}
+	}
+	if colorRange != "" {
+		jsonExtras["colour_description_present"] = "Yes"
+		jsonExtras["colour_description_present_Source"] = "Container"
+		jsonExtras["colour_range"] = colorRange
+		jsonExtras["colour_range_Source"] = "Container"
+	}
+	durationSeconds := 0.0
+	if kind == StreamVideo {
+		if defaultDuration > 0 && segmentDuration > 0 {
+			frameDuration := float64(defaultDuration) / 1e9
+			frameCount := math.Floor(segmentDuration / frameDuration)
+			if frameCount > 0 {
+				durationSeconds = frameCount * frameDuration
+				if math.Abs(segmentDuration-durationSeconds) > 0.0005 {
+					jsonExtras["FrameRate_Mode_Original"] = "VFR"
+				}
+			}
+		}
+		if durationSeconds == 0 && segmentDuration > 0 {
+			durationSeconds = segmentDuration
+		}
+	}
+	if kind == StreamAudio && segmentDuration > 0 {
+		durationSeconds = segmentDuration
+	}
+	if durationSeconds > 0 {
+		jsonExtras["Duration"] = fmt.Sprintf("%.9f", durationSeconds)
+	}
+	return Stream{Kind: kind, Fields: fields, JSON: jsonExtras}, true
 }
 
 func parseMatroskaVideo(buf []byte) (uint64, uint64, uint64, uint64, string) {
@@ -806,6 +866,20 @@ func readUnsigned(buf []byte) (uint64, bool) {
 	var value uint64
 	for _, b := range buf {
 		value = (value << 8) | uint64(b)
+	}
+	return value, true
+}
+
+func readSigned(buf []byte) (int64, bool) {
+	if len(buf) == 0 || len(buf) > 8 {
+		return 0, false
+	}
+	var value int64
+	for _, b := range buf {
+		value = (value << 8) | int64(b)
+	}
+	if buf[0]&0x80 != 0 {
+		value -= 1 << (uint(len(buf)) * 8)
 	}
 	return value, true
 }

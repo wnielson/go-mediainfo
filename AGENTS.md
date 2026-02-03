@@ -99,6 +99,9 @@ Owner: soup
 - Bitrate formatting: use Mb/s when >= 1,000,000 bps in `formatBitrate`
 - MPEG-PS AC-3: buffer across PES payloads; use AC-3 frame size table + next-sync validation; parse dialog normalization/compr/cmixlev/surmixlev/mixlevel/roomtyp + dialnorm stats
 - AC-3 `compr` dB uses heavy dynamic range scale `pow(2, v) * ((code & 0xF) | 0x10)` with `v = (code>>4) - ((code>>7)<<4) - 4`, then `20*log10(scale)`
+- Matroska JSON parity: TrackUID -> `UniqueID`, TrackOffset -> `Delay`/`Video_Delay` (Container); video Duration uses frameCount*DefaultDuration with 9-decimal JSON
+- Matroska JSON adds `colour_*` fields when Color range present; `ErrorDetectionType` lives under `extra`
+- JSON Rotation should be injected for MP4 video only; AAC `FrameCount` only for `mp4a*` codec IDs
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

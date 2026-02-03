@@ -85,6 +85,9 @@ func AnalyzeFile(path string) (Report, error) {
 				var bitrate float64
 				jsonExtras := map[string]string{}
 				jsonRaw := map[string]string{}
+				if track.Kind == StreamVideo {
+					jsonExtras["Rotation"] = "0.000"
+				}
 				if displayDuration > 0 {
 					if track.SampleBytes > 0 {
 						durationForBitrate := displayDuration
@@ -214,10 +217,27 @@ func AnalyzeFile(path string) (Report, error) {
 	case "Matroska":
 		if parsed, ok := ParseMatroska(file, stat.Size()); ok {
 			info = parsed.Container
+			general.JSON = map[string]string{}
 			for _, field := range parsed.General {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
 			streams = append(streams, parsed.Tracks...)
+			if info.DurationSeconds > 0 {
+				overall := (float64(stat.Size()) * 8) / info.DurationSeconds
+				general.JSON["OverallBitRate"] = fmt.Sprintf("%d", int64(math.Round(overall)))
+			}
+			general.JSON["IsStreamable"] = "Yes"
+			for _, stream := range streams {
+				if stream.Kind != StreamVideo {
+					continue
+				}
+				duration, durOk := parseDurationSeconds(findField(stream.Fields, "Duration"))
+				fps, fpsOk := parseFPS(findField(stream.Fields, "Frame rate"))
+				if durOk && fpsOk {
+					general.JSON["FrameCount"] = fmt.Sprintf("%d", int(math.Round(duration*fps)))
+				}
+				break
+			}
 			if _, err := file.Seek(0, io.SeekStart); err == nil {
 				sniff := make([]byte, 1<<20)
 				n, _ := io.ReadFull(file, sniff)
