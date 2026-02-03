@@ -79,6 +79,9 @@ Owner: soup
 - Text output: label column width 41 + ends with 2 blank lines (Fprintln adds 1) to match CLI
 - AVI: parse RIFF hdrl/strl/movi + INFO/ISFT; MPEG-4 Visual VOL/user data for profile/BVOP/QPel/GMC/Matrix; frame rate ratio for stream, simple rate for general
 - MPEG-PS/VOB: parse PES + MPEG-2 sequence/extension/GOP/picture headers for profile/Matrix/GOP/timecode/BVOP; duration uses PTS span + 2 frames; stream bitrate uses floored kbps for CLI parity
+- MPEG Video (MPG): detect elementary stream; parse MPEG-2 headers for profile/GOP/timecode; add extension warning fields and general Format version
+- MPEG-PS: private stream 0xBD substream IDs map AC-3 (0x80-0x87) / RLE subs (0x20-0x3F); AC-3 payload skips 4-byte DVD header; parse AC-3 header for bitrate/channels/sample rate/service kind; AAC ADTS probing for PS audio
+- MPEG-PS: pack/system/padding headers (0xBA/0xBB/0xBE) need explicit skip; PTS parsing now checks marker bits; NTSC/PAL standard only when 720x480/576
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.
