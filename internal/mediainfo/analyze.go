@@ -403,18 +403,92 @@ func AnalyzeFile(path string) (Report, error) {
 		if parsedInfo, parsedStreams, ok := ParseMPEGVideo(file, stat.Size()); ok {
 			info = parsedInfo
 			streams = parsedStreams
+			general.JSON = map[string]string{}
 			general.Fields = appendFieldUnique(general.Fields, Field{Name: "Format version", Value: "Version 2"})
 			general.Fields = appendFieldUnique(general.Fields, Field{Name: "FileExtension_Invalid", Value: "mpgv mpv mp1v m1v mp2v m2v"})
 			general.Fields = appendFieldUnique(general.Fields, Field{Name: "Conformance warnings", Value: "Yes"})
 			general.Fields = appendFieldUnique(general.Fields, Field{Name: " General compliance", Value: "File name extension is not expected for this file format (actual mpg, expected mpgv mpv mp1v m1v mp2v m2v)"})
+			if info.DurationSeconds > 0 {
+				jsonDuration := math.Round(info.DurationSeconds*1000) / 1000
+				if jsonDuration > 0 {
+					overall := (float64(stat.Size()) * 8) / jsonDuration
+					general.JSON["OverallBitRate"] = fmt.Sprintf("%d", int64(math.Round(overall)))
+				}
+			}
+			var frameCount string
+			var streamSizeSum int64
+			for i := range streams {
+				streams[i].JSONSkipStreamOrder = true
+				if streams[i].Kind == StreamVideo {
+					duration, durOk := parseDurationSeconds(findField(streams[i].Fields, "Duration"))
+					fps, fpsOk := parseFPS(findField(streams[i].Fields, "Frame rate"))
+					if durOk && fpsOk {
+						frameCount = fmt.Sprintf("%d", int(math.Round(duration*fps)))
+					}
+				}
+				if streams[i].JSON != nil {
+					if value, ok := streams[i].JSON["StreamSize"]; ok {
+						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+							streamSizeSum += parsed
+						}
+					}
+				}
+			}
+			if frameCount != "" {
+				general.JSON["FrameCount"] = frameCount
+			}
+			if streamSizeSum > 0 {
+				remaining := stat.Size() - streamSizeSum
+				if remaining >= 0 {
+					general.JSON["StreamSize"] = fmt.Sprintf("%d", remaining)
+				}
+			}
+			general.JSONRaw = map[string]string{
+				"extra": "{\"FileExtension_Invalid\":\"mpgv mpv mp1v m1v mp2v m2v\",\"ConformanceWarnings\":[{\"GeneralCompliance\":\"File name extension is not expected for this file format (actual mpg, expected mpgv mpv mp1v m1v mp2v m2v)\"}]}",
+			}
 		}
 	case "AVI":
 		if parsedInfo, parsedStreams, generalFields, ok := ParseAVI(file, stat.Size()); ok {
 			info = parsedInfo
+			general.JSON = map[string]string{}
 			for _, field := range generalFields {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
 			streams = parsedStreams
+			if info.DurationSeconds > 0 {
+				jsonDuration := math.Round(info.DurationSeconds*1000) / 1000
+				if jsonDuration > 0 {
+					overall := (float64(stat.Size()) * 8) / jsonDuration
+					general.JSON["OverallBitRate"] = fmt.Sprintf("%d", int64(math.Round(overall)))
+				}
+			}
+			var frameCount string
+			var streamSizeSum int64
+			for _, stream := range streams {
+				if stream.Kind == StreamVideo {
+					duration, durOk := parseDurationSeconds(findField(stream.Fields, "Duration"))
+					fps, fpsOk := parseFPS(findField(stream.Fields, "Frame rate"))
+					if durOk && fpsOk {
+						frameCount = fmt.Sprintf("%d", int(math.Round(duration*fps)))
+					}
+				}
+				if stream.JSON != nil {
+					if value, ok := stream.JSON["StreamSize"]; ok {
+						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+							streamSizeSum += parsed
+						}
+					}
+				}
+			}
+			if frameCount != "" {
+				general.JSON["FrameCount"] = frameCount
+			}
+			if streamSizeSum > 0 {
+				remaining := stat.Size() - streamSizeSum
+				if remaining >= 0 {
+					general.JSON["StreamSize"] = fmt.Sprintf("%d", remaining)
+				}
+			}
 		}
 	}
 

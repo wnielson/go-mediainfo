@@ -22,6 +22,9 @@ type mpeg2VideoInfo struct {
 	GOPLength         int
 	GOPOpenClosed     string
 	GOPFirstClosed    string
+	GOPDropFrame      *bool
+	GOPClosed         *bool
+	GOPBrokenLink     *bool
 	TimeCode          string
 	TimeCodeSource    string
 	ColorSpace        string
@@ -190,14 +193,14 @@ func (p *mpeg2VideoParser) parseGOPHeader(data []byte) {
 		return
 	}
 	br := newBitReader(data)
-	_ = br.readBitsValue(1) // drop_frame
+	dropFrame := br.readBitsValue(1)
 	hours := br.readBitsValue(5)
 	minutes := br.readBitsValue(6)
 	_ = br.readBitsValue(1)
 	seconds := br.readBitsValue(6)
 	pictures := br.readBitsValue(6)
 	closed := br.readBitsValue(1)
-	_ = br.readBitsValue(1)
+	broken := br.readBitsValue(1)
 
 	if p.info.TimeCode == "" {
 		p.info.TimeCode = fmt.Sprintf("%02d:%02d:%02d:%02d", hours, minutes, seconds, pictures)
@@ -214,6 +217,18 @@ func (p *mpeg2VideoParser) parseGOPHeader(data []byte) {
 		} else {
 			p.info.GOPFirstClosed = "Open"
 		}
+	}
+	if p.info.GOPDropFrame == nil {
+		val := dropFrame == 1
+		p.info.GOPDropFrame = &val
+	}
+	if p.info.GOPClosed == nil {
+		val := closed == 1
+		p.info.GOPClosed = &val
+	}
+	if p.info.GOPBrokenLink == nil {
+		val := broken == 1
+		p.info.GOPBrokenLink = &val
 	}
 	if !closedBool {
 		p.anyOpenGOP = true

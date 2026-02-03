@@ -111,12 +111,26 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			out = append(out, jsonKV{Key: "Format_Settings_CABAC", Val: field.Value})
 		case "Format settings, BVOP":
 			out = append(out, jsonKV{Key: "Format_Settings_BVOP", Val: field.Value})
+		case "Format settings, QPel":
+			out = append(out, jsonKV{Key: "Format_Settings_QPel", Val: field.Value})
+		case "Format settings, GMC":
+			value := field.Value
+			if strings.HasPrefix(value, "No") {
+				value = "0"
+			} else if parsed := extractLeadingNumber(value); parsed != "" {
+				value = parsed
+			}
+			out = append(out, jsonKV{Key: "Format_Settings_GMC", Val: value})
 		case "Format settings, Matrix":
 			out = append(out, jsonKV{Key: "Format_Settings_Matrix", Val: field.Value})
 		case "Format settings, GOP":
 			out = append(out, jsonKV{Key: "Format_Settings_GOP", Val: field.Value})
 		case "Format settings, Reference frames":
 			out = append(out, jsonKV{Key: "Format_Settings_RefFrames", Val: extractLeadingNumber(field.Value)})
+		case "Format settings":
+			if kind == StreamGeneral {
+				out = append(out, jsonKV{Key: "Format_Settings", Val: field.Value})
+			}
 		case "Codec ID":
 			id, compat := splitCodecID(field.Value)
 			out = append(out, jsonKV{Key: "CodecID", Val: id})

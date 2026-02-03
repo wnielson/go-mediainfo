@@ -1,7 +1,9 @@
 package mediainfo
 
 import (
+	"fmt"
 	"io"
+	"math"
 )
 
 func ParseMPEGVideo(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool) {
@@ -96,7 +98,47 @@ func ParseMPEGVideo(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bo
 		}
 	}
 
-	streams := []Stream{{Kind: StreamVideo, Fields: fields}}
+	jsonExtras := map[string]string{}
+	if duration > 0 {
+		jsonDuration := math.Round(duration*1000) / 1000
+		if jsonDuration > 0 {
+			jsonExtras["BitRate"] = fmt.Sprintf("%d", int64(math.Round((float64(size)*8)/jsonDuration)))
+		}
+	}
+	if size > 0 {
+		jsonExtras["StreamSize"] = fmt.Sprintf("%d", size)
+	}
+	if info.BufferSize > 0 {
+		jsonExtras["BufferSize"] = fmt.Sprintf("%d", info.BufferSize)
+	}
+	if info.GOPDropFrame != nil && info.GOPClosed != nil && info.GOPBrokenLink != nil {
+		drop := 0
+		closed := 0
+		broken := 0
+		if *info.GOPDropFrame {
+			drop = 1
+		}
+		if *info.GOPClosed {
+			closed = 1
+		}
+		if *info.GOPBrokenLink {
+			broken = 1
+		}
+		jsonExtras["Delay"] = "0.000"
+		jsonExtras["Delay_Settings"] = fmt.Sprintf("drop_frame_flag=%d / closed_gop=%d / broken_link=%d", drop, closed, broken)
+		if drop == 1 {
+			jsonExtras["Delay_DropFrame"] = "Yes"
+		} else {
+			jsonExtras["Delay_DropFrame"] = "No"
+		}
+		jsonExtras["Delay_Source"] = "Stream"
+	}
+	jsonRaw := map[string]string{}
+	if info.IntraDCPrecision > 0 {
+		jsonRaw["extra"] = renderJSONObject([]jsonKV{{Key: "intra_dc_precision", Val: fmt.Sprintf("%d", info.IntraDCPrecision)}}, false)
+	}
+
+	streams := []Stream{{Kind: StreamVideo, Fields: fields, JSON: jsonExtras, JSONRaw: jsonRaw}}
 	container := ContainerInfo{}
 	if duration > 0 {
 		container.DurationSeconds = duration

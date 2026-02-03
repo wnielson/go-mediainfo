@@ -7,7 +7,7 @@
 - Next targets: sample sweep (PS/TS edge cases), parity audit for JSON/XML/CSV
 - Remaining diffs: JSON/XML/CSV parity audit, broader sample sweep for edge cases
 - Implement MediaInfo JSON/XML/CSV schema parity (raw field names/values, missing fields, exact formatting)
-- JSON parity: MP4 + MKV + TS done; VOB/AVI remaining (UniqueID, delays, colors, streamable, raw sizes)
+- JSON parity: sample set complete (MP4/MKV/TS/AVI/MPEG Video/VOB)
 - MPEG-PS/VOB JSON: expand VOB parity sweep beyond samples (sample.vob + sample_ac3.vob match)
 
 ## Post-parity

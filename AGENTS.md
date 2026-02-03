@@ -107,6 +107,9 @@ Owner: soup
 - MPEG-TS Menu JSON: `List_StreamKind`/`List_StreamPos`, Service* fields, PMT `pointer_field` + `section_length` in `extra`
 - MPEG-PS JSON: FirstPacketOrder ignores Menu streams (video/audio start at 0)
 - MPEG-PS JSON: GOP-only header-byte bitrate uses small duration bias (0.99818) to match MediaInfo (sample_ac3.vob)
+- AVI JSON: StreamSize uses raw bytes; BitRate uses stream rate/scale duration (not kb/s-rounded); General JSON carries OverallBitRate/FrameCount/StreamSize
+- MPEG Video JSON: no StreamOrder; BitRate uses JSON-rounded Duration; Delay_Settings from GOP header; BufferSize + intra_dc_precision in `extra`
+- JSON field order: Delay_Settings between Delay and Delay_DropFrame; Format_Settings only for General
 - AC-3 JSON: ServiceKind uses short codes (e.g., CM)
 - AC-3 stats parity: dialnorm/compr/dynrng averages are intensity-based; skip compr/dynrng code 0xFF; dynrng counts include dynrnge=false frames as 0 dB but stats only emitted when any dynrnge seen
 
