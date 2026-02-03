@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 )
 
@@ -150,15 +151,11 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 						videoParsers[key] = parser
 					}
 					parser.consume(esPayload)
+					consumeMPEG2HeaderBytes(entry, esPayload)
 				}
 				if entry.kind == StreamAudio {
 					if entry.format == "AC-3" {
-						if !entry.hasAC3 {
-							if info, ok := parseAC3Header(esPayload); ok {
-								entry.ac3Info = info
-								entry.hasAC3 = true
-							}
-						}
+						consumeAC3PS(entry, esPayload)
 					} else {
 						consumeADTSPS(entry, esPayload)
 						if entry.hasAudioInfo && entry.format == "MPEG Audio" {
@@ -280,6 +277,18 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 			if duration > 0 {
 				fields = addStreamDuration(fields, duration)
 			}
+			effectiveBytes := st.bytes
+			useHeaderBytes := fromGOP && st.videoHeaderBytes > 0
+			if useHeaderBytes {
+				effectiveBytes = st.videoHeaderBytes
+			}
+			bitrateDuration := duration
+			if useHeaderBytes && info.FrameRate > 0 {
+				rounded := math.Round(info.FrameRate)
+				if rounded > 0 {
+					bitrateDuration = 1.0 / rounded
+				}
+			}
 			mode := info.BitRateMode
 			if mode == "" {
 				mode = "Variable"
@@ -287,14 +296,20 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 			fields = append(fields, Field{Name: "Bit rate mode", Value: mode})
 			bitrate := 0.0
 			kbps := int64(0)
-			if duration > 0 && st.bytes > 0 {
-				bitrate = (float64(st.bytes) * 8) / duration
-				kbps = int64(bitrate / 1000.0)
-				if kbps < 0 {
-					kbps = 0
-				}
-				if value := formatBitrateKbps(kbps); value != "" {
-					fields = appendFieldUnique(fields, Field{Name: "Bit rate", Value: value})
+			if bitrateDuration > 0 && effectiveBytes > 0 {
+				bitrate = (float64(effectiveBytes) * 8) / bitrateDuration
+				if useHeaderBytes {
+					if value := formatBitratePrecise(bitrate); value != "" {
+						fields = appendFieldUnique(fields, Field{Name: "Bit rate", Value: value})
+					}
+				} else {
+					kbps = int64(bitrate / 1000.0)
+					if kbps < 0 {
+						kbps = 0
+					}
+					if value := formatBitrateKbps(kbps); value != "" {
+						fields = appendFieldUnique(fields, Field{Name: "Bit rate", Value: value})
+					}
 				}
 			}
 			if info.MaxBitRateKbps > 0 {
@@ -354,13 +369,17 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 					fields = append(fields, Field{Name: "GOP, Open/Closed of first frame", Value: info.GOPFirstClosed})
 				}
 			}
-			if kbps > 0 && duration > 0 {
+			if useHeaderBytes && effectiveBytes > 0 {
+				if streamSize := formatStreamSize(int64(effectiveBytes), size); streamSize != "" {
+					fields = append(fields, Field{Name: "Stream size", Value: streamSize})
+				}
+			} else if kbps > 0 && duration > 0 {
 				streamSizeBytes := int64(float64(kbps*1000)*duration/8.0 + 0.5)
 				if streamSize := formatStreamSize(streamSizeBytes, size); streamSize != "" {
 					fields = append(fields, Field{Name: "Stream size", Value: streamSize})
 				}
-			} else if st.bytes > 0 {
-				if streamSize := formatStreamSize(int64(st.bytes), size); streamSize != "" {
+			} else if effectiveBytes > 0 {
+				if streamSize := formatStreamSize(int64(effectiveBytes), size); streamSize != "" {
 					fields = append(fields, Field{Name: "Stream size", Value: streamSize})
 				}
 			}
@@ -403,6 +422,29 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				}
 				if st.ac3Info.serviceKind != "" {
 					fields = append(fields, Field{Name: "Service kind", Value: st.ac3Info.serviceKind})
+				}
+				if st.ac3Info.hasDialnorm {
+					fields = append(fields, Field{Name: "Dialog Normalization", Value: fmt.Sprintf("%d dB", st.ac3Info.dialnorm)})
+				}
+				if st.ac3Info.hasCompr {
+					fields = append(fields, Field{Name: "compr", Value: fmt.Sprintf("%.2f dB", st.ac3Info.comprDB)})
+				}
+				if st.ac3Info.hasCmixlev {
+					fields = append(fields, Field{Name: "cmixlev", Value: fmt.Sprintf("%.1f dB", st.ac3Info.cmixlevDB)})
+				}
+				if st.ac3Info.hasSurmixlev {
+					fields = append(fields, Field{Name: "surmixlev", Value: fmt.Sprintf("%.0f dB", st.ac3Info.surmixlevDB)})
+				}
+				if st.ac3Info.hasMixlevel {
+					fields = append(fields, Field{Name: "mixlevel", Value: fmt.Sprintf("%d dB", st.ac3Info.mixlevel)})
+				}
+				if st.ac3Info.hasRoomtyp {
+					fields = append(fields, Field{Name: "roomtyp", Value: st.ac3Info.roomtyp})
+				}
+				if avg, min, max, ok := st.ac3Info.dialnormStats(); ok {
+					fields = append(fields, Field{Name: "dialnorm_Average", Value: fmt.Sprintf("%d dB", avg)})
+					fields = append(fields, Field{Name: "dialnorm_Minimum", Value: fmt.Sprintf("%d dB", min)})
+					fields = append(fields, Field{Name: "dialnorm_Maximum", Value: fmt.Sprintf("%d dB", max)})
 				}
 			} else if st.audioRate > 0 {
 				fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
@@ -528,6 +570,40 @@ func mapPSStream(streamID byte, subID byte) (StreamKind, string) {
 		return StreamAudio, "MPEG Audio"
 	default:
 		return "", ""
+	}
+}
+
+func consumeAC3PS(entry *psStream, payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+	entry.audioBuffer = append(entry.audioBuffer, payload...)
+	i := 0
+	for i+7 <= len(entry.audioBuffer) {
+		if entry.audioBuffer[i] != 0x0B || entry.audioBuffer[i+1] != 0x77 {
+			i++
+			continue
+		}
+		frameInfo, frameSize, ok := parseAC3Frame(entry.audioBuffer[i:])
+		if !ok || frameSize <= 0 {
+			i++
+			continue
+		}
+		if i+frameSize > len(entry.audioBuffer) {
+			break
+		}
+		if i+frameSize+1 < len(entry.audioBuffer) {
+			if entry.audioBuffer[i+frameSize] != 0x0B || entry.audioBuffer[i+frameSize+1] != 0x77 {
+				i++
+				continue
+			}
+		}
+		entry.ac3Info.mergeFrame(frameInfo)
+		entry.hasAC3 = true
+		i += frameSize
+	}
+	if i > 0 {
+		entry.audioBuffer = append(entry.audioBuffer[:0], entry.audioBuffer[i:]...)
 	}
 }
 

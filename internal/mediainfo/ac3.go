@@ -1,7 +1,7 @@
 package mediainfo
 
 import (
-	"bytes"
+	"math"
 	"strings"
 )
 
@@ -15,6 +15,23 @@ type ac3Info struct {
 	serviceKind string
 	frameRate   float64
 	spf         int
+
+	dialnorm      int
+	dialnormSum   int64
+	dialnormCount int
+	dialnormMin   int
+	dialnormMax   int
+	hasDialnorm   bool
+	comprDB       float64
+	hasCompr      bool
+	cmixlevDB     float64
+	hasCmixlev    bool
+	surmixlevDB   float64
+	hasSurmixlev  bool
+	mixlevel      int
+	hasMixlevel   bool
+	roomtyp       string
+	hasRoomtyp    bool
 }
 
 type ac3BitReader struct {
@@ -36,66 +53,130 @@ func (br *ac3BitReader) readBits(n int) (uint32, bool) {
 	return value, true
 }
 
-func parseAC3Header(payload []byte) (ac3Info, bool) {
+func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	var info ac3Info
-	idx := bytes.Index(payload, []byte{0x0B, 0x77})
-	if idx < 0 || idx+7 > len(payload) {
-		return info, false
+	if len(payload) < 7 {
+		return info, 0, false
 	}
-	br := ac3BitReader{data: payload[idx:]}
+	br := ac3BitReader{data: payload}
 	if sync, ok := br.readBits(16); !ok || sync != 0x0B77 {
-		return info, false
+		return info, 0, false
 	}
 	if _, ok := br.readBits(16); !ok { // crc1
-		return info, false
+		return info, 0, false
 	}
 	fscod, ok := br.readBits(2)
 	if !ok {
-		return info, false
+		return info, 0, false
 	}
 	frmsizecod, ok := br.readBits(6)
 	if !ok {
-		return info, false
+		return info, 0, false
+	}
+	frameSize := ac3FrameSizeBytes(int(fscod), int(frmsizecod))
+	if frameSize == 0 {
+		return info, 0, false
 	}
 	bsid, ok := br.readBits(5)
 	if !ok {
-		return info, false
+		return info, 0, false
 	}
 	bsmod, ok := br.readBits(3)
 	if !ok {
-		return info, false
+		return info, 0, false
 	}
 	acmod, ok := br.readBits(3)
 	if !ok {
-		return info, false
+		return info, 0, false
 	}
 	if acmod == 0 {
 		if _, ok = br.readBits(2); !ok {
-			return info, false
+			return info, 0, false
 		}
 		if _, ok = br.readBits(2); !ok {
-			return info, false
+			return info, 0, false
 		}
 	} else {
 		if acmod&1 != 0 {
-			if _, ok = br.readBits(2); !ok {
-				return info, false
+			cmixlev, ok := br.readBits(2)
+			if !ok {
+				return info, 0, false
+			}
+			if value, ok := ac3CenterMixLevelDB(cmixlev); ok {
+				info.cmixlevDB = value
+				info.hasCmixlev = true
 			}
 		}
 		if acmod&4 != 0 {
-			if _, ok = br.readBits(2); !ok {
-				return info, false
+			surmixlev, ok := br.readBits(2)
+			if !ok {
+				return info, 0, false
+			}
+			if value, ok := ac3SurroundMixLevelDB(surmixlev); ok {
+				info.surmixlevDB = value
+				info.hasSurmixlev = true
 			}
 		}
 	}
 	if acmod == 2 {
 		if _, ok = br.readBits(2); !ok {
-			return info, false
+			return info, 0, false
 		}
 	}
 	lfeonVal, ok := br.readBits(1)
 	if !ok {
-		return info, false
+		return info, 0, false
+	}
+	dialnorm, ok := br.readBits(5)
+	if !ok {
+		return info, 0, false
+	}
+	info.hasDialnorm = true
+	info.dialnorm = ac3DialnormDB(dialnorm)
+	info.dialnormCount = 1
+	info.dialnormSum = int64(info.dialnorm)
+	info.dialnormMin = info.dialnorm
+	info.dialnormMax = info.dialnorm
+	compre, ok := br.readBits(1)
+	if !ok {
+		return info, 0, false
+	}
+	if compre == 1 {
+		compr, ok := br.readBits(8)
+		if !ok {
+			return info, 0, false
+		}
+		info.comprDB = ac3HeavyCompressionDB(compr)
+		info.hasCompr = true
+	}
+	langcode, ok := br.readBits(1)
+	if !ok {
+		return info, 0, false
+	}
+	if langcode == 1 {
+		if _, ok = br.readBits(8); !ok {
+			return info, 0, false
+		}
+	}
+	audprodie, ok := br.readBits(1)
+	if !ok {
+		return info, 0, false
+	}
+	if audprodie == 1 {
+		mixlevel, ok := br.readBits(5)
+		if !ok {
+			return info, 0, false
+		}
+		roomtyp, ok := br.readBits(2)
+		if !ok {
+			return info, 0, false
+		}
+		info.mixlevel = int(mixlevel) + 80
+		info.hasMixlevel = true
+		if value, ok := ac3RoomType(roomtyp); ok {
+			info.roomtyp = value
+			info.hasRoomtyp = true
+		}
 	}
 
 	sampleRate := ac3SampleRate(int(fscod))
@@ -108,17 +189,111 @@ func parseAC3Header(payload []byte) (ac3Info, bool) {
 	}
 
 	info = ac3Info{
-		bitRateKbps: bitRate,
-		sampleRate:  sampleRate,
-		channels:    channels,
-		layout:      layout,
-		bsid:        int(bsid),
-		bsmod:       int(bsmod),
-		serviceKind: ac3ServiceKind(int(bsmod)),
-		frameRate:   frameRate,
-		spf:         spf,
+		bitRateKbps:   bitRate,
+		sampleRate:    sampleRate,
+		channels:      channels,
+		layout:        layout,
+		bsid:          int(bsid),
+		bsmod:         int(bsmod),
+		serviceKind:   ac3ServiceKind(int(bsmod)),
+		frameRate:     frameRate,
+		spf:           spf,
+		dialnorm:      info.dialnorm,
+		dialnormSum:   info.dialnormSum,
+		dialnormCount: info.dialnormCount,
+		dialnormMin:   info.dialnormMin,
+		dialnormMax:   info.dialnormMax,
+		hasDialnorm:   info.hasDialnorm,
+		comprDB:       info.comprDB,
+		hasCompr:      info.hasCompr,
+		cmixlevDB:     info.cmixlevDB,
+		hasCmixlev:    info.hasCmixlev,
+		surmixlevDB:   info.surmixlevDB,
+		hasSurmixlev:  info.hasSurmixlev,
+		mixlevel:      info.mixlevel,
+		hasMixlevel:   info.hasMixlevel,
+		roomtyp:       info.roomtyp,
+		hasRoomtyp:    info.hasRoomtyp,
 	}
-	return info, true
+	return info, frameSize, true
+}
+
+func (info *ac3Info) mergeFrame(frame ac3Info) {
+	if frame.bitRateKbps > 0 && info.bitRateKbps == 0 {
+		info.bitRateKbps = frame.bitRateKbps
+	}
+	if frame.sampleRate > 0 && info.sampleRate == 0 {
+		info.sampleRate = frame.sampleRate
+	}
+	if frame.channels > 0 && info.channels == 0 {
+		info.channels = frame.channels
+	}
+	if frame.layout != "" && info.layout == "" {
+		info.layout = frame.layout
+	}
+	if frame.bsid > 0 && info.bsid == 0 {
+		info.bsid = frame.bsid
+	}
+	if frame.bsmod > 0 && info.bsmod == 0 {
+		info.bsmod = frame.bsmod
+	}
+	if frame.serviceKind != "" && info.serviceKind == "" {
+		info.serviceKind = frame.serviceKind
+	}
+	if frame.frameRate > 0 && info.frameRate == 0 {
+		info.frameRate = frame.frameRate
+	}
+	if frame.spf > 0 && info.spf == 0 {
+		info.spf = frame.spf
+	}
+	if frame.hasCmixlev && !info.hasCmixlev {
+		info.cmixlevDB = frame.cmixlevDB
+		info.hasCmixlev = true
+	}
+	if frame.hasSurmixlev && !info.hasSurmixlev {
+		info.surmixlevDB = frame.surmixlevDB
+		info.hasSurmixlev = true
+	}
+	if frame.hasCompr && !info.hasCompr {
+		info.comprDB = frame.comprDB
+		info.hasCompr = true
+	}
+	if frame.hasMixlevel && !info.hasMixlevel {
+		info.mixlevel = frame.mixlevel
+		info.hasMixlevel = true
+	}
+	if frame.hasRoomtyp && !info.hasRoomtyp {
+		info.roomtyp = frame.roomtyp
+		info.hasRoomtyp = true
+	}
+	if frame.hasDialnorm {
+		if info.dialnormCount == 0 {
+			info.dialnorm = frame.dialnorm
+			info.dialnormSum = frame.dialnormSum
+			info.dialnormCount = frame.dialnormCount
+			info.dialnormMin = frame.dialnormMin
+			info.dialnormMax = frame.dialnormMax
+			info.hasDialnorm = true
+			return
+		}
+		info.dialnormSum += frame.dialnormSum
+		info.dialnormCount += frame.dialnormCount
+		if frame.dialnormMin < info.dialnormMin {
+			info.dialnormMin = frame.dialnormMin
+		}
+		if frame.dialnormMax > info.dialnormMax {
+			info.dialnormMax = frame.dialnormMax
+		}
+		info.hasDialnorm = true
+	}
+}
+
+func (info ac3Info) dialnormStats() (int, int, int, bool) {
+	if info.dialnormCount == 0 {
+		return 0, 0, 0, false
+	}
+	avg := int(math.Round(float64(info.dialnormSum) / float64(info.dialnormCount)))
+	return avg, info.dialnormMin, info.dialnormMax, true
 }
 
 func ac3SampleRate(code int) float64 {
@@ -144,6 +319,106 @@ func ac3BitrateKbps(code int) int64 {
 		return 0
 	}
 	return bitRates[idx]
+}
+
+func ac3FrameSizeBytes(fscod, frmsizecod int) int {
+	if fscod < 0 || fscod > 2 || frmsizecod < 0 || frmsizecod >= len(ac3FrameSizeWords) {
+		return 0
+	}
+	return ac3FrameSizeWords[frmsizecod][fscod] * 2
+}
+
+var ac3FrameSizeWords = [38][3]int{
+	{64, 69, 96},
+	{64, 70, 96},
+	{80, 87, 120},
+	{80, 88, 120},
+	{96, 104, 144},
+	{96, 105, 144},
+	{112, 121, 168},
+	{112, 122, 168},
+	{128, 139, 192},
+	{128, 140, 192},
+	{160, 174, 240},
+	{160, 175, 240},
+	{192, 208, 288},
+	{192, 209, 288},
+	{224, 243, 336},
+	{224, 244, 336},
+	{256, 278, 384},
+	{256, 279, 384},
+	{320, 348, 480},
+	{320, 349, 480},
+	{384, 417, 576},
+	{384, 418, 576},
+	{448, 487, 672},
+	{448, 488, 672},
+	{512, 557, 768},
+	{512, 558, 768},
+	{640, 696, 960},
+	{640, 697, 960},
+	{768, 835, 1152},
+	{768, 836, 1152},
+	{896, 975, 1344},
+	{896, 976, 1344},
+	{1024, 1114, 1536},
+	{1024, 1115, 1536},
+	{1152, 1253, 1728},
+	{1152, 1254, 1728},
+	{1280, 1393, 1920},
+	{1280, 1394, 1920},
+}
+
+func ac3DialnormDB(code uint32) int {
+	if code == 0 {
+		return -31
+	}
+	return -int(code)
+}
+
+func ac3HeavyCompressionDB(code uint32) float64 {
+	v := float64(int(code>>4) - int((code>>7)<<4) - 4)
+	scale := math.Pow(2.0, v) * float64((code&0x0F)|0x10)
+	return 20.0 * math.Log10(scale)
+}
+
+func ac3CenterMixLevelDB(code uint32) (float64, bool) {
+	switch code {
+	case 0:
+		return -3.0, true
+	case 1:
+		return -4.5, true
+	case 2:
+		return -6.0, true
+	default:
+		return 0, false
+	}
+}
+
+func ac3SurroundMixLevelDB(code uint32) (float64, bool) {
+	switch code {
+	case 0:
+		return -3, true
+	case 1:
+		return -6, true
+	case 2:
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func ac3RoomType(code uint32) (string, bool) {
+	switch code {
+	case 0:
+		return "Not indicated", true
+	case 1:
+		return "Large", true
+	case 2:
+		return "Small", true
+	default:
+		return "", false
+	}
 }
 
 func ac3ChannelLayout(acmod int, lfeon bool) (uint64, string) {
