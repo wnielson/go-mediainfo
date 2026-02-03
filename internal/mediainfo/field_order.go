@@ -40,6 +40,7 @@ var streamFieldOrder = map[string]int{
 	"Format settings, GOP":              12,
 	"Format settings, CABAC":            13,
 	"Format settings, Reference frames": 14,
+	"Format settings, Slice count":      14,
 	"Codec ID":                          15,
 	"Codec ID/Info":                     16,
 	"Duration":                          17,

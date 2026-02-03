@@ -25,6 +25,8 @@ type psStream struct {
 	videoWidth       uint64
 	videoHeight      uint64
 	videoFrameRate   float64
+	videoSliceCount  int
+	videoSliceProbed bool
 	videoIsH264      bool
 	videoBuffer      []byte
 }

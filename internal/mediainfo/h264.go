@@ -284,7 +284,6 @@ func parseH264AnnexB(payload []byte) ([]Field, uint64, uint64, float64) {
 	var spsInfo h264SPSInfo
 	var hasSPS bool
 	var ppsCABAC *bool
-
 	start := 0
 	for start+4 <= len(payload) {
 		sc, scLen := findAnnexBStartCode(payload, start)
@@ -383,6 +382,73 @@ func parseH264AnnexB(payload []byte) ([]Field, uint64, uint64, float64) {
 	return fields, width, height, frameRate
 }
 
+func h264SliceCountAnnexB(payload []byte) int {
+	counts := map[int]int{}
+	current := 0
+	start := 0
+	for start+4 <= len(payload) {
+		sc, scLen := findAnnexBStartCode(payload, start)
+		if sc == -1 {
+			break
+		}
+		nalStart := sc + scLen
+		next, _ := findAnnexBStartCode(payload, nalStart)
+		nalEnd := next
+		if nalEnd == -1 {
+			nalEnd = len(payload)
+		}
+		if nalStart < nalEnd {
+			nal := payload[nalStart:nalEnd]
+			if len(nal) > 0 {
+				nalType := nal[0] & 0x1F
+				switch nalType {
+				case 9:
+					if current > 0 {
+						counts[current]++
+						current = 0
+					}
+				case 1, 5:
+					firstMB, ok := h264FirstMBInSlice(nal)
+					if ok && firstMB == 0 && current > 0 {
+						counts[current]++
+						current = 0
+					}
+					current++
+				}
+			}
+		}
+		if next == -1 {
+			break
+		}
+		start = next
+	}
+	if current > 0 {
+		counts[current]++
+	}
+	bestCount := 0
+	bestFreq := 0
+	for count, freq := range counts {
+		if freq > bestFreq || (freq == bestFreq && count > bestCount) {
+			bestCount = count
+			bestFreq = freq
+		}
+	}
+	return bestCount
+}
+
+func h264FirstMBInSlice(nal []byte) (int, bool) {
+	rbsp := nalToRBSP(nal)
+	if len(rbsp) == 0 {
+		return 0, false
+	}
+	br := newBitReader(rbsp)
+	firstMB, ok := br.readUEWithOk()
+	if !ok {
+		return 0, false
+	}
+	return firstMB, true
+}
+
 func findAnnexBStartCode(data []byte, start int) (int, int) {
 	for i := start; i+3 < len(data); i++ {
 		if data[i] == 0x00 && data[i+1] == 0x00 {
@@ -468,25 +534,11 @@ func (br *bitReader) readBitsValue(n uint8) uint64 {
 }
 
 func (br *bitReader) readUE() int {
-	zeros := 0
-	for {
-		bit := br.readBitsValue(1)
-		if bit == ^uint64(0) {
-			return 0
-		}
-		if bit == 1 {
-			break
-		}
-		zeros++
-	}
-	if zeros == 0 {
+	value, ok := br.readUEWithOk()
+	if !ok {
 		return 0
 	}
-	value := br.readBitsValue(uint8(zeros))
-	if value == ^uint64(0) {
-		return 0
-	}
-	return int((1 << zeros) - 1 + int(value))
+	return value
 }
 
 func (br *bitReader) readSE() int {
@@ -495,6 +547,28 @@ func (br *bitReader) readSE() int {
 		return -(val / 2)
 	}
 	return (val + 1) / 2
+}
+
+func (br *bitReader) readUEWithOk() (int, bool) {
+	zeros := 0
+	for {
+		bit := br.readBitsValue(1)
+		if bit == ^uint64(0) {
+			return 0, false
+		}
+		if bit == 1 {
+			break
+		}
+		zeros++
+	}
+	if zeros == 0 {
+		return 0, true
+	}
+	value := br.readBitsValue(uint8(zeros))
+	if value == ^uint64(0) {
+		return 0, false
+	}
+	return int((1 << zeros) - 1 + int(value)), true
 }
 
 func skipScalingList(br *bitReader, size int) {

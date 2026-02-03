@@ -4,7 +4,7 @@
 - Goal: 1:1 MediaInfo CLI parity (fields + values + ordering)
 - Expand format coverage + field parity across CLI outputs
 - Sample parity complete: MP4/MKV/TS/AVI/MPEG-PS (VOB)/MPEG Video (MPG) (text output)
-- Next targets: MPEG-PS AAC delay parity, H.264 slice count (PS AAC sample)
+- Next targets: sample sweep (PS/TS edge cases), parity audit for JSON/XML/CSV
 
 ## Post-parity
 - Investigate MediaInfo issue #760: DVD IFO language/runtime regression (23.07 vs 23.06). https://github.com/MediaArea/MediaInfo/issues/760

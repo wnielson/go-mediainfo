@@ -174,9 +174,7 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 			if len(esPayload) > 0 {
 				entry.bytes += uint64(len(esPayload))
 				if entry.kind == StreamVideo {
-					if !entry.videoIsH264 {
-						consumeH264PS(entry, esPayload)
-					}
+					consumeH264PS(entry, esPayload)
 					if !entry.videoIsH264 {
 						parser := videoParsers[key]
 						if parser == nil {
@@ -209,9 +207,11 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 	var streamsOut []Stream
 	sort.Slice(streamOrder, func(i, j int) bool { return streamOrder[i] < streamOrder[j] })
 	var videoFrameRate float64
+	var videoIsH264 bool
 	for _, key := range streamOrder {
 		if st := streams[key]; st != nil && st.kind == StreamVideo {
 			if st.videoIsH264 {
+				videoIsH264 = true
 				if st.videoFrameRate > 0 {
 					videoFrameRate = st.videoFrameRate
 				}
@@ -280,6 +280,9 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 			}
 			if len(st.videoFields) > 0 {
 				fields = append(fields, st.videoFields...)
+			}
+			if st.videoSliceCount > 0 {
+				fields = append(fields, Field{Name: "Format settings, Slice count", Value: fmt.Sprintf("%d slices per frame", st.videoSliceCount)})
 			}
 			duration := st.pts.duration()
 			if duration == 0 {
@@ -564,7 +567,10 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				}
 				if st.audioProfile != "" && videoPTS.has() && st.pts.has() {
 					delay := float64(int64(st.pts.min)-int64(videoPTS.min)) * 1000 / 90000.0
-					fields = append(fields, Field{Name: "Delay relative to video", Value: fmt.Sprintf("%d ms", int64(math.Round(delay)))})
+					if videoIsH264 && videoFrameRate > 0 {
+						delay -= (3.0 / videoFrameRate) * 1000.0
+					}
+					fields = append(fields, Field{Name: "Delay relative to video", Value: formatDelayMs(int64(math.Round(delay)))})
 				}
 			}
 		} else if st.kind != StreamVideo {
@@ -740,24 +746,41 @@ func consumeAC3PS(entry *psStream, payload []byte) {
 }
 
 func consumeH264PS(entry *psStream, payload []byte) {
-	if entry.videoIsH264 || len(payload) == 0 {
+	if len(payload) == 0 {
 		return
 	}
 	entry.videoBuffer = append(entry.videoBuffer, payload...)
-	const maxProbe = 256 * 1024
+	const maxProbe = 2 * 1024 * 1024
 	if len(entry.videoBuffer) > maxProbe {
 		entry.videoBuffer = append(entry.videoBuffer[:0], entry.videoBuffer[len(entry.videoBuffer)-maxProbe:]...)
 	}
-	if fields, width, height, fps := parseH264AnnexB(entry.videoBuffer); len(fields) > 0 {
-		entry.videoFields = fields
-		entry.hasVideoFields = true
-		entry.videoWidth = width
-		entry.videoHeight = height
-		if fps > 0 {
-			entry.videoFrameRate = fps
+	if !entry.videoIsH264 {
+		if fields, width, height, fps := parseH264AnnexB(entry.videoBuffer); len(fields) > 0 {
+			entry.videoFields = fields
+			entry.hasVideoFields = true
+			entry.videoWidth = width
+			entry.videoHeight = height
+			if fps > 0 {
+				entry.videoFrameRate = fps
+			}
+			entry.videoIsH264 = true
+			entry.format = "AVC"
 		}
-		entry.videoIsH264 = true
-		entry.format = "AVC"
+	}
+	if entry.videoIsH264 {
+		if entry.videoSliceCount == 0 && len(entry.videoBuffer) >= maxProbe/4 {
+			if count := h264SliceCountAnnexB(entry.videoBuffer); count > 1 {
+				entry.videoSliceCount = count
+			}
+		}
+		if !entry.videoSliceProbed && len(entry.videoBuffer) >= maxProbe {
+			if count := h264SliceCountAnnexB(entry.videoBuffer); count > entry.videoSliceCount {
+				entry.videoSliceCount = count
+			}
+			entry.videoSliceProbed = true
+		}
+	}
+	if entry.videoIsH264 && entry.videoSliceCount > 0 && len(entry.videoBuffer) > maxProbe {
 		entry.videoBuffer = nil
 	}
 }
@@ -826,7 +849,9 @@ func aacDurationPS(entry *psStream) float64 {
 	}
 	frameDuration := 1024.0 / entry.audioRate
 	if entry.pts.has() {
-		return entry.pts.duration() + 3*frameDuration
+		duration := entry.pts.duration() + 3*frameDuration
+		ms := int64(duration * 1000)
+		return float64(ms) / 1000.0
 	}
 	if entry.audioFrames > 0 {
 		return float64(entry.audioFrames) * frameDuration
@@ -839,4 +864,26 @@ func formatAudioFrameRate(rate float64, spf int) string {
 		return ""
 	}
 	return fmt.Sprintf("%.3f FPS (%d SPF)", rate, spf)
+}
+
+func formatDelayMs(ms int64) string {
+	if ms == 0 {
+		return "0 ms"
+	}
+	neg := ms < 0
+	if neg {
+		ms = -ms
+	}
+	if ms < 1000 {
+		if neg {
+			return fmt.Sprintf("-%d ms", ms)
+		}
+		return fmt.Sprintf("%d ms", ms)
+	}
+	seconds := float64(ms) / 1000.0
+	value := formatDuration(seconds)
+	if neg {
+		return "-" + value
+	}
+	return value
 }
