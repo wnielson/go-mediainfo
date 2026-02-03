@@ -16,13 +16,13 @@ type jsonTrackOut struct {
 
 func RenderJSON(reports []Report) string {
 	if len(reports) == 1 {
-		return renderJSONPayload(buildJSONPayload(reports[0]))
+		return renderJSONPayload(buildJSONPayload(reports[0])) + "\n"
 	}
 	payloads := make([]jsonPayloadOut, 0, len(reports))
 	for _, report := range reports {
 		payloads = append(payloads, buildJSONPayload(report))
 	}
-	return renderJSONPayloads(payloads)
+	return renderJSONPayloads(payloads) + "\n"
 }
 
 type jsonPayloadOut struct {
@@ -48,7 +48,7 @@ func jsonCreatingLibraryFields() []jsonKV {
 func renderJSONPayload(payload jsonPayloadOut) string {
 	var buf bytes.Buffer
 	buf.WriteString("{\n")
-	writeJSONField(&buf, "creatingLibrary", renderJSONObject(payload.CreatingLibrary), true)
+	writeJSONField(&buf, "creatingLibrary", renderJSONObject(payload.CreatingLibrary, false), true)
 	buf.WriteString(",\n")
 	writeJSONField(&buf, "media", renderJSONMedia(payload.Media), true)
 	buf.WriteString("\n}")
@@ -69,38 +69,74 @@ func renderJSONPayloads(payloads []jsonPayloadOut) string {
 }
 
 func renderJSONMedia(media jsonMediaOut) string {
-	fields := []jsonKV{{Key: "@ref", Val: media.Ref}}
 	tracks := make([]string, 0, len(media.Tracks))
 	for _, track := range media.Tracks {
-		tracks = append(tracks, renderJSONObject(track.Fields))
+		tracks = append(tracks, renderJSONTrack(track.Fields))
 	}
-	fields = append(fields, jsonKV{Key: "track", Val: renderJSONArray(tracks), Raw: true})
-	return renderJSONObject(fields)
+	return renderJSONMediaObject(media.Ref, tracks)
 }
 
-func renderJSONObject(fields []jsonKV) string {
+func renderJSONMediaObject(ref string, tracks []string) string {
+	var buf bytes.Buffer
+	buf.WriteString("{")
+	writeJSONField(&buf, "@ref", ref, false)
+	buf.WriteString(",")
+	writeJSONField(&buf, "track", renderJSONArray(tracks, false), true)
+	buf.WriteString("}")
+	return buf.String()
+}
+
+func renderJSONArray(items []string, multiline bool) string {
+	var buf bytes.Buffer
+	buf.WriteString("[")
+	for i, item := range items {
+		if i > 0 {
+			if multiline {
+				buf.WriteString(",\n")
+			} else {
+				buf.WriteString(",")
+			}
+		}
+		buf.WriteString(item)
+	}
+	buf.WriteString("]")
+	return buf.String()
+}
+
+func renderJSONTrack(fields []jsonKV) string {
 	var buf bytes.Buffer
 	buf.WriteString("{")
 	for i, field := range fields {
-		if i > 0 {
-			buf.WriteString(",\n")
+		if i == 0 {
+			writeJSONField(&buf, field.Key, field.Val, field.Raw)
+			continue
 		}
+		if i == 1 {
+			buf.WriteString(",")
+			writeJSONField(&buf, field.Key, field.Val, field.Raw)
+			continue
+		}
+		buf.WriteString(",\n")
 		writeJSONField(&buf, field.Key, field.Val, field.Raw)
 	}
 	buf.WriteString("}")
 	return buf.String()
 }
 
-func renderJSONArray(items []string) string {
+func renderJSONObject(fields []jsonKV, multiline bool) string {
 	var buf bytes.Buffer
-	buf.WriteString("[")
-	for i, item := range items {
+	buf.WriteString("{")
+	for i, field := range fields {
 		if i > 0 {
-			buf.WriteString(",\n")
+			if multiline {
+				buf.WriteString(",\n")
+			} else {
+				buf.WriteString(",")
+			}
 		}
-		buf.WriteString(item)
+		writeJSONField(&buf, field.Key, field.Val, field.Raw)
 	}
-	buf.WriteString("]")
+	buf.WriteString("}")
 	return buf.String()
 }
 

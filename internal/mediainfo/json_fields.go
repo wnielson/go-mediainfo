@@ -2,8 +2,10 @@ package mediainfo
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -57,14 +59,17 @@ func buildJSONGeneralFields(report Report) []jsonKV {
 		}
 	}
 	fields = append(fields, mapStreamFieldsToJSON(StreamGeneral, report.General.Fields)...)
-	return fields
+	fields = applyJSONExtras(fields, report.General.JSON, report.General.JSONRaw)
+	return sortJSONFields(StreamGeneral, fields)
 }
 
 func buildJSONStreamFields(stream Stream, order int) []jsonKV {
 	fields := []jsonKV{{Key: "@type", Val: string(stream.Kind)}}
 	fields = append(fields, jsonKV{Key: "StreamOrder", Val: strconv.Itoa(order)})
 	fields = append(fields, mapStreamFieldsToJSON(stream.Kind, stream.Fields)...)
-	return fields
+	fields = append(fields, buildJSONComputedFields(stream.Kind, fields)...)
+	fields = applyJSONExtras(fields, stream.JSON, stream.JSONRaw)
+	return sortJSONFields(stream.Kind, fields)
 }
 
 func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
@@ -84,6 +89,8 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			if level != "" {
 				out = append(out, jsonKV{Key: "Format_Level", Val: level})
 			}
+		case "ID":
+			out = append(out, jsonKV{Key: "ID", Val: field.Value})
 		case "Format settings, CABAC":
 			out = append(out, jsonKV{Key: "Format_Settings_CABAC", Val: field.Value})
 		case "Format settings, Reference frames":
@@ -189,9 +196,175 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 		}
 	}
 	if len(extras) > 0 {
-		out = append(out, jsonKV{Key: "extra", Val: renderJSONObject(extras), Raw: true})
+		out = append(out, jsonKV{Key: "extra", Val: renderJSONObject(extras, false), Raw: true})
 	}
 	return out
+}
+
+func buildJSONComputedFields(kind StreamKind, fields []jsonKV) []jsonKV {
+	out := []jsonKV{}
+	format := jsonFieldValue(fields, "Format")
+	duration, _ := strconv.ParseFloat(jsonFieldValue(fields, "Duration"), 64)
+	frameRate, _ := strconv.ParseFloat(jsonFieldValue(fields, "FrameRate"), 64)
+	sampleRate, _ := strconv.ParseFloat(jsonFieldValue(fields, "SamplingRate"), 64)
+	channels := jsonFieldValue(fields, "Channels")
+
+	if kind == StreamVideo && duration > 0 && frameRate > 0 {
+		if jsonFieldValue(fields, "FrameCount") == "" {
+			frameCount := int(math.Round(duration * frameRate))
+			out = append(out, jsonKV{Key: "FrameCount", Val: strconv.Itoa(frameCount)})
+		}
+		if jsonFieldValue(fields, "FrameRate_Num") == "" && jsonFieldValue(fields, "FrameRate_Den") == "" {
+			num, den := rationalizeFrameRate(frameRate)
+			if num > 0 && den > 0 {
+				out = append(out, jsonKV{Key: "FrameRate_Num", Val: strconv.Itoa(num)})
+				out = append(out, jsonKV{Key: "FrameRate_Den", Val: strconv.Itoa(den)})
+			}
+		}
+	}
+
+	if kind == StreamAudio {
+		if channels != "" && jsonFieldValue(fields, "ChannelPositions") == "" {
+			if pos := channelPositionsFromCount(channels); pos != "" {
+				out = append(out, jsonKV{Key: "ChannelPositions", Val: pos})
+			}
+		}
+		if strings.EqualFold(format, "AAC") {
+			if jsonFieldValue(fields, "Format_Settings_SBR") == "" {
+				out = append(out, jsonKV{Key: "Format_Settings_SBR", Val: "No (Explicit)"})
+			}
+			if jsonFieldValue(fields, "SamplesPerFrame") == "" {
+				out = append(out, jsonKV{Key: "SamplesPerFrame", Val: "1024"})
+			}
+			if duration > 0 && sampleRate > 0 && jsonFieldValue(fields, "SamplingCount") == "" {
+				samples := int(math.Round(duration * sampleRate))
+				out = append(out, jsonKV{Key: "SamplingCount", Val: strconv.Itoa(samples)})
+			}
+			if duration > 0 && sampleRate > 0 && jsonFieldValue(fields, "FrameCount") == "" {
+				frameCount := int(math.Round(duration * sampleRate / 1024.0))
+				out = append(out, jsonKV{Key: "FrameCount", Val: strconv.Itoa(frameCount)})
+			}
+			if src := jsonFieldValue(fields, "Source_Duration"); src != "" && jsonFieldValue(fields, "Source_FrameCount") == "" {
+				if srcDur, err := strconv.ParseFloat(src, 64); err == nil && sampleRate > 0 {
+					srcFrames := int(math.Round(srcDur * sampleRate / 1024.0))
+					out = append(out, jsonKV{Key: "Source_FrameCount", Val: strconv.Itoa(srcFrames)})
+				}
+			}
+		}
+	}
+
+	if kind == StreamVideo {
+		width, _ := strconv.ParseFloat(jsonFieldValue(fields, "Width"), 64)
+		height, _ := strconv.ParseFloat(jsonFieldValue(fields, "Height"), 64)
+		if width > 0 && height > 0 {
+			if jsonFieldValue(fields, "Sampled_Width") == "" {
+				out = append(out, jsonKV{Key: "Sampled_Width", Val: trimFloat(width)})
+			}
+			if jsonFieldValue(fields, "Sampled_Height") == "" {
+				out = append(out, jsonKV{Key: "Sampled_Height", Val: trimFloat(height)})
+			}
+			if jsonFieldValue(fields, "PixelAspectRatio") == "" {
+				displayAspect, err := strconv.ParseFloat(jsonFieldValue(fields, "DisplayAspectRatio"), 64)
+				if err == nil && displayAspect > 0 {
+					pixelAspect := displayAspect / (width / height)
+					out = append(out, jsonKV{Key: "PixelAspectRatio", Val: formatJSONFloat(pixelAspect)})
+				}
+			}
+		}
+		if jsonFieldValue(fields, "Rotation") == "" {
+			out = append(out, jsonKV{Key: "Rotation", Val: "0.000"})
+		}
+	}
+
+	return out
+}
+
+func jsonFieldValue(fields []jsonKV, key string) string {
+	for _, field := range fields {
+		if field.Key == key {
+			return field.Val
+		}
+	}
+	return ""
+}
+
+func applyJSONExtras(fields []jsonKV, extras map[string]string, rawExtras map[string]string) []jsonKV {
+	if len(extras) == 0 && len(rawExtras) == 0 {
+		return fields
+	}
+	index := map[string]int{}
+	for i, field := range fields {
+		index[field.Key] = i
+	}
+	keys := make([]string, 0, len(extras))
+	for key := range extras {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := extras[key]
+		if i, ok := index[key]; ok {
+			fields[i].Val = value
+			continue
+		}
+		fields = append(fields, jsonKV{Key: key, Val: value})
+	}
+	if len(rawExtras) > 0 {
+		rawKeys := make([]string, 0, len(rawExtras))
+		for key := range rawExtras {
+			rawKeys = append(rawKeys, key)
+		}
+		sort.Strings(rawKeys)
+		for _, key := range rawKeys {
+			value := rawExtras[key]
+			if i, ok := index[key]; ok {
+				fields[i].Val = value
+				fields[i].Raw = true
+				continue
+			}
+			fields = append(fields, jsonKV{Key: key, Val: value, Raw: true})
+		}
+	}
+	return fields
+}
+
+func channelPositionsFromCount(value string) string {
+	switch value {
+	case "1":
+		return "Front: C"
+	case "2":
+		return "Front: L R"
+	case "6":
+		return "Front: L C R, Side: L R, LFE"
+	default:
+		return ""
+	}
+}
+
+func rationalizeFrameRate(rate float64) (int, int) {
+	if rate <= 0 {
+		return 0, 0
+	}
+	common := []struct {
+		num int
+		den int
+		val float64
+	}{
+		{num: 24, den: 1, val: 24.0},
+		{num: 25, den: 1, val: 25.0},
+		{num: 30, den: 1, val: 30.0},
+		{num: 50, den: 1, val: 50.0},
+		{num: 60, den: 1, val: 60.0},
+		{num: 24000, den: 1001, val: 24000.0 / 1001.0},
+		{num: 30000, den: 1001, val: 30000.0 / 1001.0},
+		{num: 60000, den: 1001, val: 60000.0 / 1001.0},
+	}
+	for _, entry := range common {
+		if math.Abs(rate-entry.val) < 0.0005 {
+			return entry.num, entry.den
+		}
+	}
+	return int(math.Round(rate)), 1
 }
 
 func countStreams(streams []Stream) map[StreamKind]int {
@@ -233,11 +406,7 @@ func splitEncodedLibrary(value string) (string, string) {
 	if strings.HasPrefix(value, "x264") {
 		trimmed := strings.TrimPrefix(value, "x264 - ")
 		trimmed = strings.TrimPrefix(trimmed, "x264 ")
-		parts := strings.SplitN(trimmed, " ", 2)
-		if len(parts) == 2 {
-			return "x264", strings.TrimSpace(parts[1])
-		}
-		return "x264", ""
+		return "x264", strings.TrimSpace(trimmed)
 	}
 	return "", ""
 }
@@ -285,16 +454,16 @@ func formatJSONSeconds(value float64) string {
 }
 
 func parseBitrateBps(value string) (int64, bool) {
-	fields := strings.Fields(value)
-	if len(fields) < 2 {
+	tokens := strings.Fields(value)
+	if len(tokens) < 2 {
 		return 0, false
 	}
-	number := strings.ReplaceAll(fields[0], " ", "")
+	unit := tokens[len(tokens)-1]
+	number := strings.Join(tokens[:len(tokens)-1], "")
 	rate, err := strconv.ParseFloat(number, 64)
 	if err != nil {
 		return 0, false
 	}
-	unit := fields[1]
 	switch unit {
 	case "kb/s":
 		return int64(rate * 1000), true
@@ -306,16 +475,27 @@ func parseBitrateBps(value string) (int64, bool) {
 }
 
 func parseSizeBytes(value string) (int64, bool) {
-	fields := strings.Fields(value)
-	if len(fields) < 2 {
+	tokens := strings.Fields(value)
+	if len(tokens) < 2 {
 		return 0, false
 	}
-	number := strings.ReplaceAll(fields[0], " ", "")
+	last := len(tokens)
+	for i, token := range tokens {
+		if strings.HasPrefix(token, "(") {
+			last = i
+			break
+		}
+	}
+	if last < 2 {
+		return 0, false
+	}
+	unit := tokens[last-1]
+	number := strings.Join(tokens[:last-1], "")
 	size, err := strconv.ParseFloat(number, 64)
 	if err != nil {
 		return 0, false
 	}
-	switch fields[1] {
+	switch unit {
 	case "B":
 		return int64(size), true
 	case "KiB":
@@ -380,6 +560,13 @@ func parseSampleRate(value string) (int64, bool) {
 
 func formatJSONFloat(value float64) string {
 	return fmt.Sprintf("%.3f", value)
+}
+
+func trimFloat(value float64) string {
+	if value == math.Trunc(value) {
+		return fmt.Sprintf("%.0f", value)
+	}
+	return formatJSONFloat(value)
 }
 
 func extractLeadingNumber(value string) string {

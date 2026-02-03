@@ -47,6 +47,9 @@ Owner: soup
 - Channel layout now emitted for common channel counts
 - JSON field ordering now matches CLI ordering
 - JSON output now uses MediaInfoLib creatingLibrary + 26.01 version, with best-effort key mapping/values (still missing many raw fields)
+- JSON output now matches MediaInfo CLI for MP4 (field order + formatting + raw values)
+- MP4: top-level box sizes (ftyp/free/mdat/moov) mapped to JSON Header/Data/Footer/StreamSize + IsStreamable
+- MP4: edit list media_time captured; JSON extra Source_Delay derived from media_time/timescale
 - MP4 audio bitrate estimated from sample sizes + duration
 - Matroska BitRate element parsed into stream Bit rate
 - XML/HTML output renderers added (basic)

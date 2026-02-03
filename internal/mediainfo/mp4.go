@@ -18,6 +18,7 @@ type MP4Track struct {
 	LastSampleDelta uint32
 	DurationSeconds float64
 	EditDuration    float64
+	EditMediaTime   int64
 	Default         bool
 	AlternateGroup  uint16
 	Timescale       uint32
@@ -202,6 +203,7 @@ func parseTrak(buf []byte, movieTimescale uint32) (MP4Track, bool) {
 	var tkhdInfo tkhdInfo
 	var hasTkhd bool
 	var editDuration float64
+	var editMediaTime int64
 	for offset+8 <= int64(len(buf)) {
 		boxSize, boxType, headerSize := readMP4BoxHeaderFrom(buf, offset)
 		if boxSize <= 0 {
@@ -217,8 +219,9 @@ func parseTrak(buf []byte, movieTimescale uint32) (MP4Track, bool) {
 		}
 		if boxType == "edts" && movieTimescale > 0 {
 			payload := sliceBox(buf, dataOffset, boxSize-headerSize)
-			if duration := parseEdts(payload, movieTimescale); duration > 0 {
+			if duration, mediaTime := parseEdts(payload, movieTimescale); duration > 0 {
 				editDuration = duration
+				editMediaTime = mediaTime
 			}
 		}
 		if boxType == "mdia" {
@@ -229,6 +232,7 @@ func parseTrak(buf []byte, movieTimescale uint32) (MP4Track, bool) {
 				}
 				if editDuration > 0 {
 					track.EditDuration = editDuration
+					track.EditMediaTime = editMediaTime
 				}
 				if hasTkhd {
 					track.Default = tkhdInfo.Default
@@ -344,12 +348,13 @@ func parseTkhd(payload []byte) (tkhdInfo, bool) {
 	return tkhdInfo{}, false
 }
 
-func parseEdts(payload []byte, movieTimescale uint32) float64 {
+func parseEdts(payload []byte, movieTimescale uint32) (float64, int64) {
 	if movieTimescale == 0 {
-		return 0
+		return 0, 0
 	}
 	var offset int64
 	var duration float64
+	var mediaTime int64
 	for offset+8 <= int64(len(payload)) {
 		boxSize, boxType, headerSize := readMP4BoxHeaderFrom(payload, offset)
 		if boxSize <= 0 {
@@ -358,23 +363,25 @@ func parseEdts(payload []byte, movieTimescale uint32) float64 {
 		dataOffset := offset + headerSize
 		if boxType == "elst" {
 			elstPayload := sliceBox(payload, dataOffset, boxSize-headerSize)
-			if parsed := parseElst(elstPayload, movieTimescale); parsed > 0 {
-				duration = parsed
+			if parsedDuration, parsedMediaTime := parseElst(elstPayload, movieTimescale); parsedDuration > 0 {
+				duration = parsedDuration
+				mediaTime = parsedMediaTime
 			}
 		}
 		offset += boxSize
 	}
-	return duration
+	return duration, mediaTime
 }
 
-func parseElst(payload []byte, movieTimescale uint32) float64 {
+func parseElst(payload []byte, movieTimescale uint32) (float64, int64) {
 	if len(payload) < 8 || movieTimescale == 0 {
-		return 0
+		return 0, 0
 	}
 	version := payload[0]
 	entryCount := binary.BigEndian.Uint32(payload[4:8])
 	offset := 8
 	var total uint64
+	var mediaTime int64
 	switch version {
 	case 0:
 		for i := 0; i < int(entryCount); i++ {
@@ -382,9 +389,12 @@ func parseElst(payload []byte, movieTimescale uint32) float64 {
 				break
 			}
 			segmentDuration := binary.BigEndian.Uint32(payload[offset : offset+4])
-			mediaTime := int32(binary.BigEndian.Uint32(payload[offset+4 : offset+8]))
-			if mediaTime >= 0 && segmentDuration > 0 {
+			mediaTimeValue := int32(binary.BigEndian.Uint32(payload[offset+4 : offset+8]))
+			if mediaTimeValue >= 0 && segmentDuration > 0 {
 				total += uint64(segmentDuration)
+				if mediaTime == 0 {
+					mediaTime = int64(mediaTimeValue)
+				}
 			}
 			offset += 12
 		}
@@ -394,19 +404,22 @@ func parseElst(payload []byte, movieTimescale uint32) float64 {
 				break
 			}
 			segmentDuration := binary.BigEndian.Uint64(payload[offset : offset+8])
-			mediaTime := int64(binary.BigEndian.Uint64(payload[offset+8 : offset+16]))
-			if mediaTime >= 0 && segmentDuration > 0 {
+			mediaTimeValue := int64(binary.BigEndian.Uint64(payload[offset+8 : offset+16]))
+			if mediaTimeValue >= 0 && segmentDuration > 0 {
 				total += segmentDuration
+				if mediaTime == 0 {
+					mediaTime = mediaTimeValue
+				}
 			}
 			offset += 20
 		}
 	default:
-		return 0
+		return 0, 0
 	}
 	if total == 0 {
-		return 0
+		return 0, mediaTime
 	}
-	return float64(total) / float64(movieTimescale)
+	return float64(total) / float64(movieTimescale), mediaTime
 }
 
 func mapHandlerType(handler string) (StreamKind, string) {

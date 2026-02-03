@@ -40,9 +40,29 @@ func AnalyzeFile(path string) (Report, error) {
 	case "MPEG-4", "QuickTime":
 		if parsed, ok := ParseMP4(file, stat.Size()); ok {
 			info = parsed.Container
+			general.JSON = map[string]string{}
 			for _, field := range parsed.General {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
+			if info.DurationSeconds > 0 {
+				overall := (float64(stat.Size()) * 8) / info.DurationSeconds
+				general.JSON["OverallBitRate"] = fmt.Sprintf("%d", int64(math.Round(overall)))
+			}
+			if headerSize, dataSize, footerSize, mdatCount, moovBeforeMdat, ok := mp4TopLevelSizes(file, stat.Size()); ok {
+				general.JSON["HeaderSize"] = fmt.Sprintf("%d", headerSize)
+				general.JSON["DataSize"] = fmt.Sprintf("%d", dataSize)
+				general.JSON["FooterSize"] = fmt.Sprintf("%d", footerSize)
+				streamSize := stat.Size() - (dataSize - int64(mdatCount*8))
+				if streamSize > 0 {
+					general.JSON["StreamSize"] = fmt.Sprintf("%d", streamSize)
+				}
+				if moovBeforeMdat {
+					general.JSON["IsStreamable"] = "Yes"
+				} else {
+					general.JSON["IsStreamable"] = "No"
+				}
+			}
+			var generalFrameCount string
 			for _, track := range parsed.Tracks {
 				fields := []Field{}
 				displayDuration := track.DurationSeconds
@@ -63,6 +83,8 @@ func AnalyzeFile(path string) (Report, error) {
 					fields = appendFieldUnique(fields, field)
 				}
 				var bitrate float64
+				jsonExtras := map[string]string{}
+				jsonRaw := map[string]string{}
 				if displayDuration > 0 {
 					if track.SampleBytes > 0 {
 						durationForBitrate := displayDuration
@@ -91,13 +113,15 @@ func AnalyzeFile(path string) (Report, error) {
 							}
 						}
 						fields = addStreamBitrate(fields, bitrate)
+						jsonExtras["BitRate"] = fmt.Sprintf("%d", int64(math.Round(bitrate)))
 					}
 				}
 				if track.SampleBytes > 0 {
 					streamBytes := int64(track.SampleBytes)
+					displaySamples := 0.0
 					if sourceDuration > 0 && displayDuration > 0 {
 						if track.SampleDelta > 0 && track.SampleCount > 0 && track.Timescale > 0 {
-							displaySamples := (displayDuration * float64(track.Timescale)) / float64(track.SampleDelta)
+							displaySamples = (displayDuration * float64(track.Timescale)) / float64(track.SampleDelta)
 							if displaySamples > 0 {
 								streamBytes = int64(math.Round(float64(track.SampleBytes) * displaySamples / float64(track.SampleCount)))
 							} else if bitrate > 0 {
@@ -110,9 +134,25 @@ func AnalyzeFile(path string) (Report, error) {
 					if streamSize := formatStreamSize(streamBytes, stat.Size()); streamSize != "" {
 						fields = appendFieldUnique(fields, Field{Name: "Stream size", Value: streamSize})
 					}
+					if streamBytes > 0 {
+						jsonStreamBytes := streamBytes
+						if track.Kind == StreamAudio && sourceDuration > 0 {
+							jsonStreamBytes++
+						}
+						jsonExtras["StreamSize"] = fmt.Sprintf("%d", jsonStreamBytes)
+					}
 					if sourceDuration > 0 {
 						if sourceSize := formatStreamSize(int64(track.SampleBytes), stat.Size()); sourceSize != "" {
 							fields = appendFieldUnique(fields, Field{Name: "Source stream size", Value: sourceSize})
+						}
+						jsonExtras["Source_StreamSize"] = fmt.Sprintf("%d", int64(track.SampleBytes))
+						if track.Kind == StreamAudio {
+							if displaySamples > 0 {
+								jsonExtras["FrameCount"] = fmt.Sprintf("%d", int64(math.Round(displaySamples)))
+							}
+							if track.SampleCount > 0 {
+								jsonExtras["Source_FrameCount"] = fmt.Sprintf("%d", track.SampleCount)
+							}
 						}
 					}
 				}
@@ -128,6 +168,11 @@ func AnalyzeFile(path string) (Report, error) {
 							fields = appendFieldUnique(fields, Field{Name: "Bits/(Pixel*Frame)", Value: bits})
 						}
 					}
+					jsonExtras["FrameCount"] = fmt.Sprintf("%d", track.SampleCount)
+					jsonExtras["FrameRate_Mode_Original"] = "VFR"
+					if generalFrameCount == "" {
+						generalFrameCount = fmt.Sprintf("%d", track.SampleCount)
+					}
 				}
 				if track.Default && track.Kind != StreamVideo {
 					fields = appendFieldUnique(fields, Field{Name: "Default", Value: "Yes"})
@@ -135,7 +180,16 @@ func AnalyzeFile(path string) (Report, error) {
 				if track.AlternateGroup > 0 {
 					fields = appendFieldUnique(fields, Field{Name: "Alternate group", Value: fmt.Sprintf("%d", track.AlternateGroup)})
 				}
-				streams = append(streams, Stream{Kind: track.Kind, Fields: fields})
+				if track.Kind == StreamAudio && track.EditMediaTime > 0 && track.Timescale > 0 {
+					delayMs := int64(math.Round(float64(track.EditMediaTime) * 1000 / float64(track.Timescale)))
+					if delayMs != 0 {
+						jsonRaw["extra"] = fmt.Sprintf("{\"Source_Delay\":\"-%d\",\"Source_Delay_Source\":\"Container\"}", delayMs)
+					}
+				}
+				streams = append(streams, Stream{Kind: track.Kind, Fields: fields, JSON: jsonExtras, JSONRaw: jsonRaw})
+			}
+			if generalFrameCount != "" {
+				general.JSON["FrameCount"] = generalFrameCount
 			}
 			if _, err := file.Seek(0, io.SeekStart); err == nil {
 				sniff := make([]byte, 1<<20)
@@ -252,6 +306,15 @@ func AnalyzeFile(path string) (Report, error) {
 			info = parsedInfo
 			streams = parsedStreams
 		}
+	case "MPEG Video":
+		if parsedInfo, parsedStreams, ok := ParseMPEGVideo(file, stat.Size()); ok {
+			info = parsedInfo
+			streams = parsedStreams
+			general.Fields = appendFieldUnique(general.Fields, Field{Name: "Format version", Value: "Version 2"})
+			general.Fields = appendFieldUnique(general.Fields, Field{Name: "FileExtension_Invalid", Value: "mpgv mpv mp1v m1v mp2v m2v"})
+			general.Fields = appendFieldUnique(general.Fields, Field{Name: "Conformance warnings", Value: "Yes"})
+			general.Fields = appendFieldUnique(general.Fields, Field{Name: " General compliance", Value: "File name extension is not expected for this file format (actual mpg, expected mpgv mpv mp1v m1v mp2v m2v)"})
+		}
 	case "AVI":
 		if parsedInfo, parsedStreams, generalFields, ok := ParseAVI(file, stat.Size()); ok {
 			info = parsedInfo
@@ -267,7 +330,7 @@ func AnalyzeFile(path string) (Report, error) {
 			continue
 		}
 		if rate := findField(stream.Fields, "Frame rate"); rate != "" {
-			if format == "MPEG-PS" && strings.Contains(rate, "(") {
+			if (format == "MPEG-PS" || format == "MPEG Video") && strings.Contains(rate, "(") {
 				parts := strings.Fields(rate)
 				if len(parts) > 0 {
 					general.Fields = appendFieldUnique(general.Fields, Field{Name: "Frame rate", Value: fmt.Sprintf("%s FPS", parts[0])})
