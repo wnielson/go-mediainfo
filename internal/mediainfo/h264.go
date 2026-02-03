@@ -5,25 +5,35 @@ import (
 )
 
 type h264SPSInfo struct {
-	ChromaFormat  string
-	BitDepth      int
-	RefFrames     int
-	Progressive   bool
-	HasScanType   bool
-	VideoFormat   int
-	HasVideoFmt   bool
-	ColorRange    string
-	HasColorRange bool
-	ProfileID     byte
-	LevelID       byte
-	Width         uint64
-	Height        uint64
-	FrameRate     float64
+	ChromaFormat            string
+	BitDepth                int
+	RefFrames               int
+	Progressive             bool
+	HasScanType             bool
+	VideoFormat             int
+	HasVideoFmt             bool
+	ColorRange              string
+	HasColorRange           bool
+	ColorPrimaries          string
+	TransferCharacteristics string
+	MatrixCoefficients      string
+	HasColorDescription     bool
+	ProfileID               byte
+	LevelID                 byte
+	Width                   uint64
+	Height                  uint64
+	CodedWidth              uint64
+	CodedHeight             uint64
+	FrameRate               float64
+	BitRate                 int64
+	HasBitRate              bool
+	BufferSize              int64
+	HasBufferSize           bool
 }
 
-func parseAVCConfig(payload []byte) (string, []Field) {
+func parseAVCConfig(payload []byte) (string, []Field, h264SPSInfo) {
 	if len(payload) < 7 {
-		return "", nil
+		return "", nil, h264SPSInfo{}
 	}
 	profileID := payload[1]
 	levelID := payload[3]
@@ -74,6 +84,25 @@ func parseAVCConfig(payload []byte) (string, []Field) {
 	if spsInfo.BitDepth > 0 {
 		fields = append(fields, Field{Name: "Bit depth", Value: formatBitDepth(uint8(spsInfo.BitDepth))})
 	}
+	if spsInfo.HasVideoFmt {
+		if standard := mapH264VideoFormat(spsInfo.VideoFormat); standard != "" {
+			fields = append(fields, Field{Name: "Standard", Value: standard})
+		}
+	}
+	if spsInfo.HasColorRange {
+		fields = append(fields, Field{Name: "Color range", Value: spsInfo.ColorRange})
+	}
+	if spsInfo.HasColorDescription {
+		if spsInfo.ColorPrimaries != "" {
+			fields = append(fields, Field{Name: "Color primaries", Value: spsInfo.ColorPrimaries})
+		}
+		if spsInfo.TransferCharacteristics != "" {
+			fields = append(fields, Field{Name: "Transfer characteristics", Value: spsInfo.TransferCharacteristics})
+		}
+		if spsInfo.MatrixCoefficients != "" {
+			fields = append(fields, Field{Name: "Matrix coefficients", Value: spsInfo.MatrixCoefficients})
+		}
+	}
 	if spsInfo.HasScanType {
 		if spsInfo.Progressive {
 			fields = append(fields, Field{Name: "Scan type", Value: "Progressive"})
@@ -101,7 +130,7 @@ func parseAVCConfig(payload []byte) (string, []Field) {
 		}
 	}
 
-	return profile, fields
+	return profile, fields, spsInfo
 }
 
 func parseH264SPS(nal []byte) h264SPSInfo {
@@ -119,6 +148,14 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	hasVideoFormat := false
 	colorRange := ""
 	hasColorRange := false
+	colorPrimaries := ""
+	transferCharacteristics := ""
+	matrixCoefficients := ""
+	hasColorDescription := false
+	bitRate := int64(0)
+	hasBitRate := false
+	bufferSize := int64(0)
+	hasBufferSize := false
 
 	if isHighProfile(profileID) {
 		chromaFormat = br.readUE()
@@ -175,11 +212,13 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		cropBottom = br.readUE()
 	}
 
-	width := (picWidthMbsMinus1 + 1) * 16
-	height := (picHeightMapUnitsMinus1 + 1) * 16
+	codedWidth := (picWidthMbsMinus1 + 1) * 16
+	codedHeight := (picHeightMapUnitsMinus1 + 1) * 16
 	if frameMbsOnly == 0 {
-		height *= 2
+		codedHeight *= 2
 	}
+	width := codedWidth
+	height := codedHeight
 	if cropFlag == 1 {
 		subWidthC := 1
 		subHeightC := 1
@@ -233,9 +272,13 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 			}
 			hasColorRange = true
 			if br.readBitsValue(1) == 1 {
-				_ = br.readBitsValue(8)
-				_ = br.readBitsValue(8)
-				_ = br.readBitsValue(8)
+				primaries := br.readBitsValue(8)
+				transfer := br.readBitsValue(8)
+				matrix := br.readBitsValue(8)
+				colorPrimaries = matroskaColorName(primaries)
+				transferCharacteristics = matroskaColorName(transfer)
+				matrixCoefficients = matroskaColorName(matrix)
+				hasColorDescription = true
 			}
 		}
 		if br.readBitsValue(1) == 1 {
@@ -250,25 +293,104 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 				frameRate = float64(timeScale) / (2.0 * float64(numUnitsInTick))
 			}
 		}
+		nalHRDPresent := br.readBitsValue(1) == 1
+		if nalHRDPresent {
+			if hrdBitRate, hrdBuffer, ok := parseH264HRD(br); ok {
+				if hrdBitRate > 0 {
+					bitRate = hrdBitRate
+					hasBitRate = true
+				}
+				if hrdBuffer > 0 {
+					bufferSize = hrdBuffer
+					hasBufferSize = true
+				}
+			}
+		}
+		vclHRDPresent := br.readBitsValue(1) == 1
+		if vclHRDPresent {
+			if hrdBitRate, hrdBuffer, ok := parseH264HRD(br); ok {
+				if hrdBitRate > 0 && !hasBitRate {
+					bitRate = hrdBitRate
+					hasBitRate = true
+				}
+				if hrdBuffer > 0 && !hasBufferSize {
+					bufferSize = hrdBuffer
+					hasBufferSize = true
+				}
+			}
+		}
+		if nalHRDPresent || vclHRDPresent {
+			_ = br.readBitsValue(1)
+		}
 	}
 
 	info := h264SPSInfo{
-		BitDepth:      bitDepth,
-		RefFrames:     refFrames,
-		Progressive:   progressive,
-		HasScanType:   true,
-		VideoFormat:   videoFormat,
-		HasVideoFmt:   hasVideoFormat,
-		ColorRange:    colorRange,
-		HasColorRange: hasColorRange,
-		ProfileID:     byte(profileID),
-		LevelID:       byte(levelID),
-		Width:         uint64(width),
-		Height:        uint64(height),
-		FrameRate:     frameRate,
+		BitDepth:                bitDepth,
+		RefFrames:               refFrames,
+		Progressive:             progressive,
+		HasScanType:             true,
+		VideoFormat:             videoFormat,
+		HasVideoFmt:             hasVideoFormat,
+		ColorRange:              colorRange,
+		HasColorRange:           hasColorRange,
+		ColorPrimaries:          colorPrimaries,
+		TransferCharacteristics: transferCharacteristics,
+		MatrixCoefficients:      matrixCoefficients,
+		HasColorDescription:     hasColorDescription,
+		ProfileID:               byte(profileID),
+		LevelID:                 byte(levelID),
+		Width:                   uint64(width),
+		Height:                  uint64(height),
+		CodedWidth:              uint64(codedWidth),
+		CodedHeight:             uint64(codedHeight),
+		FrameRate:               frameRate,
+		BitRate:                 bitRate,
+		HasBitRate:              hasBitRate,
+		BufferSize:              bufferSize,
+		HasBufferSize:           hasBufferSize,
 	}
 	info.ChromaFormat = chromaFormatString(chromaFormat)
 	return info
+}
+
+func parseH264HRD(br *bitReader) (int64, int64, bool) {
+	cpbCntMinus1, ok := br.readUEWithOk()
+	if !ok {
+		return 0, 0, false
+	}
+	bitRateScale := br.readBitsValue(4)
+	cpbSizeScale := br.readBitsValue(4)
+	if bitRateScale == ^uint64(0) || cpbSizeScale == ^uint64(0) {
+		return 0, 0, false
+	}
+	var bitRateValue int
+	var cpbSizeValue int
+	for i := 0; i <= cpbCntMinus1; i++ {
+		brValue, ok := br.readUEWithOk()
+		if !ok {
+			return 0, 0, false
+		}
+		value, ok := br.readUEWithOk()
+		if !ok {
+			return 0, 0, false
+		}
+		if i == 0 {
+			bitRateValue = brValue
+			cpbSizeValue = value
+		}
+		if br.readBitsValue(1) == ^uint64(0) {
+			return 0, 0, false
+		}
+	}
+	if br.readBitsValue(5) == ^uint64(0) || br.readBitsValue(5) == ^uint64(0) || br.readBitsValue(5) == ^uint64(0) || br.readBitsValue(5) == ^uint64(0) {
+		return 0, 0, false
+	}
+	bitRate := int64(bitRateValue+1) << (6 + bitRateScale)
+	bufferSize := int64(cpbSizeValue+1) << (4 + cpbSizeScale)
+	if bitRate < 0 || bufferSize < 0 {
+		return 0, 0, false
+	}
+	return bitRate, bufferSize, true
 }
 
 func parseH264PPSCabac(nal []byte) (bool, bool) {

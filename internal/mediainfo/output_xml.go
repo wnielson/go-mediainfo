@@ -58,21 +58,32 @@ func renderXMLMedia(report Report) string {
 	}
 	buf.WriteString(">\n")
 
-	buf.WriteString(renderXMLTrack("General", buildJSONGeneralFields(report)))
+	buf.WriteString(renderXMLTrack("General", 0, buildJSONGeneralFields(report)))
 
 	sorted := orderTracks(report.Streams)
+	kindCounts := countStreams(sorted)
+	kindIndex := map[StreamKind]int{}
 	for i, stream := range sorted {
-		fields := buildJSONStreamFields(stream, i)
-		buf.WriteString(renderXMLTrack(string(stream.Kind), fields))
+		kindIndex[stream.Kind]++
+		typeOrder := 0
+		if kindCounts[stream.Kind] > 1 {
+			typeOrder = kindIndex[stream.Kind]
+		}
+		fields := buildJSONStreamFields(stream, i, 0)
+		buf.WriteString(renderXMLTrack(string(stream.Kind), typeOrder, fields))
 	}
 
 	buf.WriteString("</media>\n")
 	return buf.String()
 }
 
-func renderXMLTrack(trackType string, fields []jsonKV) string {
+func renderXMLTrack(trackType string, typeOrder int, fields []jsonKV) string {
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("<track type=\"%s\">\n", xmlEscapeAttr(trackType)))
+	buf.WriteString(fmt.Sprintf("<track type=\"%s\"", xmlEscapeAttr(trackType)))
+	if typeOrder > 0 {
+		buf.WriteString(fmt.Sprintf(" typeorder=\"%d\"", typeOrder))
+	}
+	buf.WriteString(">\n")
 	for _, field := range fields {
 		if field.Key == "@type" {
 			continue
@@ -204,6 +215,7 @@ func xmlEscape(value string) string {
 	value = strings.ReplaceAll(value, "<", "&lt;")
 	value = strings.ReplaceAll(value, ">", "&gt;")
 	value = strings.ReplaceAll(value, "\"", "&quot;")
+	value = strings.ReplaceAll(value, "'", "&apos;")
 	return value
 }
 

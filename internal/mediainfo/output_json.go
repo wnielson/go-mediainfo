@@ -106,17 +106,18 @@ func renderJSONArray(items []string, multiline bool) string {
 func renderJSONTrack(fields []jsonKV) string {
 	var buf bytes.Buffer
 	buf.WriteString("{")
+	inlineCount := 2
+	if len(fields) > 2 && fields[1].Key == "@typeorder" && fields[2].Key == "StreamOrder" {
+		inlineCount = 3
+	}
 	for i, field := range fields {
-		if i == 0 {
-			writeJSONField(&buf, field.Key, field.Val, field.Raw)
-			continue
+		if i > 0 {
+			if i < inlineCount {
+				buf.WriteString(",")
+			} else {
+				buf.WriteString(",\n")
+			}
 		}
-		if i == 1 {
-			buf.WriteString(",")
-			writeJSONField(&buf, field.Key, field.Val, field.Raw)
-			continue
-		}
-		buf.WriteString(",\n")
 		writeJSONField(&buf, field.Key, field.Val, field.Raw)
 	}
 	buf.WriteString("}")

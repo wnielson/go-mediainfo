@@ -10,6 +10,11 @@ import (
 )
 
 func AnalyzeFile(path string) (Report, error) {
+	return AnalyzeFileWithOptions(path, defaultAnalyzeOptions())
+}
+
+func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
+	opts = normalizeAnalyzeOptions(opts)
 	stat, err := os.Stat(path)
 	if err != nil {
 		return Report{}, err
@@ -215,26 +220,67 @@ func AnalyzeFile(path string) (Report, error) {
 			}
 		}
 	case "Matroska":
-		if parsed, ok := ParseMatroska(file, stat.Size()); ok {
+		if parsed, ok := ParseMatroskaWithOptions(file, stat.Size(), opts); ok {
 			info = parsed.Container
 			general.JSON = map[string]string{}
+			var rawWritingApp string
 			for _, field := range parsed.General {
+				if field.Name == "Writing application" {
+					rawWritingApp = field.Value
+					field.Value = normalizeWritingApplication(field.Value)
+				}
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
 			streams = append(streams, parsed.Tracks...)
+			if rawWritingApp != "" {
+				general.JSON["Encoded_Application"] = rawWritingApp
+				if name, version, _ := splitWritingApplication(rawWritingApp); name != "" {
+					general.JSON["Encoded_Application_Name"] = name
+					if version != "" {
+						general.JSON["Encoded_Application_Version"] = version
+					}
+				}
+			}
+			if info.DurationSeconds > 0 {
+				general.JSON["Duration"] = formatJSONFloat(info.DurationSeconds)
+			}
 			if info.DurationSeconds > 0 {
 				overall := (float64(stat.Size()) * 8) / info.DurationSeconds
 				general.JSON["OverallBitRate"] = fmt.Sprintf("%d", int64(math.Round(overall)))
 			}
 			general.JSON["IsStreamable"] = "Yes"
+			var streamSizeSum int64
+			for _, stream := range streams {
+				if stream.JSON != nil {
+					if value, ok := stream.JSON["StreamSize"]; ok {
+						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+							streamSizeSum += parsed
+						}
+					}
+				} else if sizeValue := findField(stream.Fields, "Stream size"); sizeValue != "" {
+					if parsed, ok := parseSizeBytes(sizeValue); ok {
+						streamSizeSum += parsed
+					}
+				}
+			}
+			if streamSizeSum > 0 {
+				remaining := stat.Size() - streamSizeSum
+				if remaining >= 0 {
+					general.JSON["StreamSize"] = fmt.Sprintf("%d", remaining)
+				}
+			}
 			for _, stream := range streams {
 				if stream.Kind != StreamVideo {
 					continue
 				}
-				duration, durOk := parseDurationSeconds(findField(stream.Fields, "Duration"))
-				fps, fpsOk := parseFPS(findField(stream.Fields, "Frame rate"))
-				if durOk && fpsOk {
-					general.JSON["FrameCount"] = fmt.Sprintf("%d", int(math.Round(duration*fps)))
+				if frameCount := stream.JSON["FrameCount"]; frameCount != "" {
+					general.JSON["FrameCount"] = frameCount
+				} else {
+					duration, durOk := parseDurationSeconds(findField(stream.Fields, "Duration"))
+					fps, fpsOk := parseFPS(findField(stream.Fields, "Frame rate"))
+					if durOk && fpsOk {
+						general.JSON["FrameCount"] = fmt.Sprintf("%d", int(math.Round(duration*fps)))
+					}
 				}
 				break
 			}
@@ -497,7 +543,7 @@ func AnalyzeFile(path string) (Report, error) {
 			continue
 		}
 		if rate := findField(stream.Fields, "Frame rate"); rate != "" {
-			if (format == "MPEG-PS" || format == "MPEG Video") && strings.Contains(rate, "(") {
+			if (format == "MPEG-PS" || format == "MPEG Video" || format == "Matroska") && strings.Contains(rate, "(") {
 				parts := strings.Fields(rate)
 				if len(parts) > 0 {
 					general.Fields = appendFieldUnique(general.Fields, Field{Name: "Frame rate", Value: fmt.Sprintf("%s FPS", parts[0])})
@@ -539,9 +585,13 @@ func AnalyzeFile(path string) (Report, error) {
 }
 
 func AnalyzeFiles(paths []string) ([]Report, int, error) {
+	return AnalyzeFilesWithOptions(paths, defaultAnalyzeOptions())
+}
+
+func AnalyzeFilesWithOptions(paths []string, opts AnalyzeOptions) ([]Report, int, error) {
 	reports := make([]Report, 0, len(paths))
 	for _, path := range paths {
-		report, err := AnalyzeFile(path)
+		report, err := AnalyzeFileWithOptions(path, opts)
 		if err != nil {
 			return nil, 0, fmt.Errorf("%s: %w", path, err)
 		}
@@ -551,11 +601,11 @@ func AnalyzeFiles(paths []string) ([]Report, int, error) {
 }
 
 func parsePixels(value string) (uint64, bool) {
-	parts := strings.Fields(value)
-	if len(parts) == 0 {
+	parsedValue := extractLeadingNumber(value)
+	if parsedValue == "" {
 		return 0, false
 	}
-	parsed, err := strconv.ParseUint(parts[0], 10, 64)
+	parsed, err := strconv.ParseUint(parsedValue, 10, 64)
 	if err != nil {
 		return 0, false
 	}

@@ -144,11 +144,11 @@ func parseVisualSampleEntry(entry []byte, sampleType string) sampleEntryResult {
 	}
 	if sampleType == "avc1" || sampleType == "avc3" {
 		if payload, ok := findMP4ChildBox(entry, mp4VisualSampleEntryHeaderSize, "avcC"); ok {
-			_, avcFields := parseAVCConfig(payload)
+			_, avcFields, _ := parseAVCConfig(payload)
 			fields = append(fields, avcFields...)
 			fields = append(fields, Field{Name: "Codec configuration box", Value: "avcC"})
 		} else if payload, ok := findMP4BoxByName(entry, "avcC"); ok {
-			_, avcFields := parseAVCConfig(payload)
+			_, avcFields, _ := parseAVCConfig(payload)
 			fields = append(fields, avcFields...)
 			fields = append(fields, Field{Name: "Codec configuration box", Value: "avcC"})
 		}

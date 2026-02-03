@@ -27,9 +27,13 @@ type ac3Info struct {
 	comprDB       float64
 	comprCount    int
 	comprSum      float64
+	comprSumDB    float64
 	comprMin      float64
 	comprMax      float64
 	hasCompr      bool
+	comprIsDB     bool
+	comprFieldDB  float64
+	hasComprField bool
 	dynrngCount   int
 	dynrngSum     float64
 	dynrngMin     float64
@@ -147,19 +151,22 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	if !ok {
 		return info, 0, false
 	}
+	compr, ok := br.readBits(8)
+	if !ok {
+		return info, 0, false
+	}
+	info.comprFieldDB = ac3ComprDB(uint8(compr))
+	info.hasComprField = true
+	info.hasCompr = true
 	if compre == 1 {
-		compr, ok := br.readBits(8)
-		if !ok {
-			return info, 0, false
-		}
-		info.comprDB = ac3ComprDB(uint8(compr))
+		info.comprDB = info.comprFieldDB
 		if compr != 0xFF {
-			info.comprSum = math.Pow(10.0, info.comprDB/10.0)
+			info.comprSumDB = info.comprDB
+			info.comprIsDB = true
 			info.comprCount = 1
 			info.comprMin = info.comprDB
 			info.comprMax = info.comprDB
 		}
-		info.hasCompr = true
 	}
 	langcode, ok := br.readBits(1)
 	if !ok {
@@ -297,6 +304,151 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	return info, frameSize, true
 }
 
+func parseEAC3Frame(payload []byte) (ac3Info, int, bool) {
+	var info ac3Info
+	if len(payload) < 7 {
+		return info, 0, false
+	}
+	br := ac3BitReader{data: payload}
+	if sync, ok := br.readBits(16); !ok || sync != 0x0B77 {
+		return info, 0, false
+	}
+	if _, ok := br.readBits(2); !ok { // strmtyp
+		return info, 0, false
+	}
+	if _, ok := br.readBits(3); !ok { // substreamid
+		return info, 0, false
+	}
+	frmsiz, ok := br.readBits(11)
+	if !ok {
+		return info, 0, false
+	}
+	frameSize := int((frmsiz + 1) * 2)
+	fscod, ok := br.readBits(2)
+	if !ok {
+		return info, 0, false
+	}
+	fscod2 := uint32(0)
+	if fscod == 3 {
+		val, ok := br.readBits(2)
+		if !ok {
+			return info, 0, false
+		}
+		fscod2 = val
+	}
+	numblkscod, ok := br.readBits(2)
+	if !ok {
+		return info, 0, false
+	}
+	acmod, ok := br.readBits(3)
+	if !ok {
+		return info, 0, false
+	}
+	lfeonVal, ok := br.readBits(1)
+	if !ok {
+		return info, 0, false
+	}
+	bsid, ok := br.readBits(5)
+	if !ok {
+		return info, 0, false
+	}
+	dialnorm, ok := br.readBits(5)
+	if !ok {
+		return info, 0, false
+	}
+	info.hasDialnorm = true
+	info.dialnorm = ac3DialnormDB(dialnorm)
+	info.dialnormCount = 1
+	info.dialnormSum = math.Pow(10.0, float64(info.dialnorm)/10.0)
+	info.dialnormMin = info.dialnorm
+	info.dialnormMax = info.dialnorm
+	compre, ok := br.readBits(1)
+	if !ok {
+		return info, 0, false
+	}
+	if compre == 1 {
+		compr, ok := br.readBits(8)
+		if !ok {
+			return info, 0, false
+		}
+		info.comprDB = ac3ComprDB(uint8(compr))
+		info.comprSum = math.Pow(10.0, info.comprDB/10.0)
+		info.comprCount = 1
+		info.comprMin = info.comprDB
+		info.comprMax = info.comprDB
+		info.hasCompr = true
+	}
+
+	sampleRate := eac3SampleRate(int(fscod), int(fscod2))
+	spf := eac3SamplesPerFrame(int(numblkscod))
+	frameRate := 0.0
+	if sampleRate > 0 && spf > 0 {
+		frameRate = sampleRate / float64(spf)
+	}
+	bitRate := int64(0)
+	if sampleRate > 0 && spf > 0 && frameSize > 0 {
+		bitRate = int64(math.Round(float64(frameSize*8) * sampleRate / (float64(spf) * 1000.0)))
+	}
+	channels, layout := ac3ChannelLayout(int(acmod), lfeonVal == 1)
+	info = ac3Info{
+		bitRateKbps:   bitRate,
+		sampleRate:    sampleRate,
+		channels:      channels,
+		layout:        layout,
+		bsid:          int(bsid),
+		bsmod:         0,
+		acmod:         int(acmod),
+		lfeon:         int(lfeonVal),
+		serviceKind:   ac3ServiceKind(0),
+		frameRate:     frameRate,
+		spf:           spf,
+		dialnorm:      info.dialnorm,
+		dialnormSum:   info.dialnormSum,
+		dialnormCount: info.dialnormCount,
+		dialnormMin:   info.dialnormMin,
+		dialnormMax:   info.dialnormMax,
+		hasDialnorm:   info.hasDialnorm,
+		comprDB:       info.comprDB,
+		comprCount:    info.comprCount,
+		comprSum:      info.comprSum,
+		comprMin:      info.comprMin,
+		comprMax:      info.comprMax,
+		hasCompr:      info.hasCompr,
+	}
+	return info, frameSize, true
+}
+
+func eac3SampleRate(fscod int, fscod2 int) float64 {
+	if fscod == 3 {
+		switch fscod2 {
+		case 0:
+			return 24000
+		case 1:
+			return 22050
+		case 2:
+			return 16000
+		default:
+			return 0
+		}
+	}
+	return ac3SampleRate(fscod)
+}
+
+func eac3SamplesPerFrame(numblkscod int) int {
+	switch numblkscod {
+	case 0:
+		return 256
+	case 1:
+		return 512
+	case 2:
+		return 768
+	case 3:
+		return 1536
+	default:
+		return 0
+	}
+}
+
 func (info *ac3Info) mergeFrame(frame ac3Info) {
 	if frame.bitRateKbps > 0 && info.bitRateKbps == 0 {
 		info.bitRateKbps = frame.bitRateKbps
@@ -339,18 +491,30 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 		info.surmixlevDB = frame.surmixlevDB
 		info.hasSurmixlev = true
 	}
+	if frame.hasComprField {
+		if !info.hasComprField || frame.comprFieldDB > info.comprFieldDB {
+			info.comprFieldDB = frame.comprFieldDB
+			info.hasComprField = true
+		}
+	}
 	if frame.hasCompr && !info.hasCompr {
 		info.comprDB = frame.comprDB
 		info.hasCompr = true
 	}
 	if frame.comprCount > 0 {
 		if info.comprCount == 0 {
+			info.comprIsDB = frame.comprIsDB
 			info.comprSum = frame.comprSum
+			info.comprSumDB = frame.comprSumDB
 			info.comprCount = frame.comprCount
 			info.comprMin = frame.comprMin
 			info.comprMax = frame.comprMax
 		} else {
-			info.comprSum += frame.comprSum
+			if info.comprIsDB {
+				info.comprSumDB += frame.comprSumDB
+			} else {
+				info.comprSum += frame.comprSum
+			}
 			info.comprCount += frame.comprCount
 			if frame.comprMin < info.comprMin {
 				info.comprMin = frame.comprMin
@@ -422,7 +586,12 @@ func (info ac3Info) comprStats() (float64, float64, float64, int, bool) {
 	if info.comprCount == 0 {
 		return 0, 0, 0, 0, false
 	}
-	avg := 10.0 * math.Log10(info.comprSum/float64(info.comprCount))
+	var avg float64
+	if info.comprIsDB {
+		avg = info.comprSumDB / float64(info.comprCount)
+	} else {
+		avg = 10.0 * math.Log10(info.comprSum/float64(info.comprCount))
+	}
 	return avg, info.comprMin, info.comprMax, info.comprCount, true
 }
 

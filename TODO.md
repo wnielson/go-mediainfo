@@ -10,6 +10,7 @@
 - Implement MediaInfo JSON/XML/CSV schema parity (raw field names/values, missing fields, exact formatting) where still missing
 - JSON parity: sample set complete (MP4/MKV/TS/AVI/MPEG Video/VOB)
 - MPEG-PS/VOB JSON: expand VOB parity sweep beyond samples (sample.vob + sample_ac3.vob match)
+- MKV (The.Rookie... WEB-DL) parity complete across text/JSON/XML/CSV
 
 ## Post-parity
 - Investigate MediaInfo issue #760: DVD IFO language/runtime regression (23.07 vs 23.06). https://github.com/MediaArea/MediaInfo/issues/760

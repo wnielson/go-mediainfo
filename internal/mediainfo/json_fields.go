@@ -20,8 +20,15 @@ func buildJSONMedia(report Report) jsonMediaOut {
 	tracks := make([]jsonTrackOut, 0, len(report.Streams)+1)
 	tracks = append(tracks, jsonTrackOut{Fields: buildJSONGeneralFields(report)})
 	sorted := orderTracks(report.Streams)
+	kindCounts := countStreams(sorted)
+	kindIndex := map[StreamKind]int{}
 	for i, stream := range sorted {
-		tracks = append(tracks, jsonTrackOut{Fields: buildJSONStreamFields(stream, i)})
+		kindIndex[stream.Kind]++
+		typeOrder := 0
+		if kindCounts[stream.Kind] > 1 {
+			typeOrder = kindIndex[stream.Kind]
+		}
+		tracks = append(tracks, jsonTrackOut{Fields: buildJSONStreamFields(stream, i, typeOrder)})
 	}
 	return jsonMediaOut{Ref: report.Ref, Tracks: tracks}
 }
@@ -51,11 +58,11 @@ func buildJSONGeneralFields(report Report) []jsonKV {
 		if size := fileSizeBytes(report.Ref); size > 0 {
 			fields = append(fields, jsonKV{Key: "FileSize", Val: strconv.FormatInt(size, 10)})
 		}
-		if createdUTC, createdLocal, ok := fileTimes(report.Ref); ok {
+		if createdUTC, createdLocal, modifiedUTC, modifiedLocal, ok := fileTimes(report.Ref); ok {
 			fields = append(fields, jsonKV{Key: "File_Created_Date", Val: createdUTC})
 			fields = append(fields, jsonKV{Key: "File_Created_Date_Local", Val: createdLocal})
-			fields = append(fields, jsonKV{Key: "File_Modified_Date", Val: createdUTC})
-			fields = append(fields, jsonKV{Key: "File_Modified_Date_Local", Val: createdLocal})
+			fields = append(fields, jsonKV{Key: "File_Modified_Date", Val: modifiedUTC})
+			fields = append(fields, jsonKV{Key: "File_Modified_Date_Local", Val: modifiedLocal})
 		}
 	}
 	fields = append(fields, mapStreamFieldsToJSON(StreamGeneral, report.General.Fields)...)
@@ -63,8 +70,11 @@ func buildJSONGeneralFields(report Report) []jsonKV {
 	return sortJSONFields(StreamGeneral, fields)
 }
 
-func buildJSONStreamFields(stream Stream, order int) []jsonKV {
+func buildJSONStreamFields(stream Stream, order int, typeOrder int) []jsonKV {
 	fields := []jsonKV{{Key: "@type", Val: string(stream.Kind)}}
+	if typeOrder > 0 {
+		fields = append(fields, jsonKV{Key: "@typeorder", Val: strconv.Itoa(typeOrder)})
+	}
 	if !stream.JSONSkipStreamOrder {
 		fields = append(fields, jsonKV{Key: "StreamOrder", Val: strconv.Itoa(order)})
 	}
@@ -207,6 +217,8 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			}
 		case "Writing application":
 			out = append(out, jsonKV{Key: "Encoded_Application", Val: field.Value})
+		case "Format settings, Endianness":
+			out = append(out, jsonKV{Key: "Format_Settings_Endianness", Val: field.Value})
 		case "Writing library":
 			encoded := field.Value
 			if strings.HasPrefix(encoded, "x264 ") && !strings.HasPrefix(encoded, "x264 - ") {
@@ -221,6 +233,10 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			}
 		case "Encoding settings":
 			out = append(out, jsonKV{Key: "Encoded_Library_Settings", Val: field.Value})
+		case "Language":
+			out = append(out, jsonKV{Key: "Language", Val: field.Value})
+		case "Title":
+			out = append(out, jsonKV{Key: "Title", Val: field.Value})
 		case "Channel(s)":
 			out = append(out, jsonKV{Key: "Channels", Val: extractLeadingNumber(field.Value)})
 		case "Channel layout":
@@ -642,11 +658,26 @@ func trimFloat(value float64) string {
 }
 
 func extractLeadingNumber(value string) string {
-	fields := strings.Fields(value)
-	if len(fields) == 0 {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return ""
 	}
-	return strings.ReplaceAll(fields[0], " ", "")
+	var buf strings.Builder
+	for i, r := range value {
+		if (r >= '0' && r <= '9') || r == ' ' || r == '.' {
+			buf.WriteRune(r)
+			continue
+		}
+		if i == 0 && r == '-' {
+			buf.WriteRune(r)
+			continue
+		}
+		break
+	}
+	if buf.Len() == 0 {
+		return ""
+	}
+	return strings.ReplaceAll(buf.String(), " ", "")
 }
 
 func mapBitrateMode(value string) string {
@@ -677,15 +708,4 @@ func fileSizeBytes(path string) int64 {
 		return 0
 	}
 	return info.Size()
-}
-
-func fileTimes(path string) (string, string, bool) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", "", false
-	}
-	mod := info.ModTime()
-	utc := mod.UTC().Format("2006-01-02 15:04:05 MST")
-	local := mod.Local().Format("2006-01-02 15:04:05")
-	return utc, local, true
 }

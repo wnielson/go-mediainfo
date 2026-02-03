@@ -116,6 +116,9 @@ Owner: soup
 - JSON field order: Delay_Settings between Delay and Delay_DropFrame; Format_Settings only for General
 - AC-3 JSON: ServiceKind uses short codes (e.g., CM)
 - AC-3 stats parity: dialnorm/compr/dynrng averages are intensity-based; skip compr/dynrng code 0xFF; dynrng counts include dynrnge=false frames as 0 dB but stats only emitted when any dynrnge seen
+- ParseSpeed default is 0.5; ParseSpeed>=1 enables full E-AC-3 probe, <1 limits compr stats sample (target 1113 frames)
+- Matroska E-AC-3: parse laced frames per-frame for probe stats
+- E-AC-3 compr field uses 0xFF mapping (ac3ComprDB(0xFF)) even when stats exclude 0xFF
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

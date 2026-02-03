@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/autobrr/go-mediainfo/internal/mediainfo"
@@ -233,7 +234,16 @@ func runCore(opts Options, files []string) (string, int, error) {
 		}
 	}
 
-	reports, count, err := mediainfo.AnalyzeFiles(files)
+	analyzeOpts := mediainfo.AnalyzeOptions{}
+	for _, opt := range opts.CoreOptions {
+		if strings.EqualFold(opt.Name, "parsespeed") {
+			if value, err := strconv.ParseFloat(strings.TrimSpace(opt.Value), 64); err == nil {
+				analyzeOpts.ParseSpeed = value
+				analyzeOpts.HasParseSpeed = true
+			}
+		}
+	}
+	reports, count, err := mediainfo.AnalyzeFilesWithOptions(files, analyzeOpts)
 	if err != nil {
 		return "", 0, err
 	}

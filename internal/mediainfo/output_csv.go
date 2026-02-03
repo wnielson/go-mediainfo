@@ -1,6 +1,9 @@
 package mediainfo
 
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+)
 
 func RenderCSV(reports []Report) string {
 	var buf bytes.Buffer
@@ -14,11 +17,18 @@ func RenderCSV(reports []Report) string {
 		kindIndex := map[StreamKind]int{}
 		for _, stream := range report.Streams {
 			kindIndex[stream.Kind]++
-			title := streamTitle(stream.Kind, kindIndex[stream.Kind], kindCounts[stream.Kind])
+			title := csvStreamTitle(stream.Kind, kindIndex[stream.Kind], kindCounts[stream.Kind])
 			writeCSVTrack(&buf, title, stream)
 		}
 	}
 	return buf.String()
+}
+
+func csvStreamTitle(kind StreamKind, index int, total int) string {
+	if total > 1 {
+		return fmt.Sprintf("%s,%d", kind, index)
+	}
+	return string(kind)
 }
 
 func writeCSVTrack(buf *bytes.Buffer, trackType string, stream Stream) {
