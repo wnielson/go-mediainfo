@@ -372,6 +372,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			if info.DurationSeconds > 0 {
 				jsonDuration := math.Round(info.DurationSeconds*1000) / 1000
 				if jsonDuration > 0 {
+					general.JSON["Duration"] = formatJSONSeconds(jsonDuration)
 					overall := (float64(stat.Size()) * 8) / jsonDuration
 					general.JSON["OverallBitRate"] = fmt.Sprintf("%d", int64(math.Round(overall)))
 				}
@@ -386,6 +387,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 				}
 			}
 			audioIndex := 0
+			textIndex := 0
 			for i := range streams {
 				if streams[i].Kind == StreamMenu {
 					streams[i].JSONSkipStreamOrder = true
@@ -395,8 +397,17 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 					streams[i].JSON["StreamOrder"] = fmt.Sprintf("%d", audioIndex)
 					audioIndex++
 				}
+				if streams[i].Kind == StreamText {
+					streams[i].JSON["StreamOrder"] = fmt.Sprintf("%d", textIndex)
+					textIndex++
+				}
 				if streams[i].Kind == StreamVideo {
-					if findField(streams[i].Fields, "Format") != "" {
+					if streams[i].JSON != nil {
+						if value := streams[i].JSON["FrameCount"]; value != "" {
+							frameCount = value
+						}
+					}
+					if frameCount == "" && findField(streams[i].Fields, "Format") != "" {
 						duration, durOk := parseDurationSeconds(findField(streams[i].Fields, "Duration"))
 						fps, fpsOk := parseFPS(findField(streams[i].Fields, "Frame rate"))
 						if durOk && fpsOk {

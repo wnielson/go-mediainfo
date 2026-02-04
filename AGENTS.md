@@ -23,7 +23,7 @@ Owner: soup
 - DVD JSON: Language uses ISO-639 code (e.g., `en`), text uses full name (e.g., English)
 - DVD JSON: Menu order is Duration, Delay, FrameRate, FrameRate_Num, FrameRate_Den, FrameCount, extra
 - DVD JSON: SamplingCount present for audio; PixelAspectRatio present for video even when computed fields skipped
-- JSON: MediaInfo CLI does not emit File_Created_Date fields in JSON (only modified)
+- JSON: FileExtension preserves filename case; File_Created_Date/Local emitted when available
 - DVD aggregate (VTS_XX_0.IFO): parse title-set VOBs via streaming MPEG-PS; file size = sum VTS_XX_1..n + IFO (exclude VTS_XX_0.VOB)
 - DVD aggregate JSON: add AC-3 *_String extras + dialnorm_Count; add Source in stream extra
 - DVD CC: detect GA94 user_data in MPEG-2, emit EIA-608 Text stream + JSON fields (MuxingMode_MoreInfo, Duration_* timing, FirstDisplay_*), CC3 for field 2
@@ -130,7 +130,9 @@ Owner: soup
 - MPEG-TS JSON parity: StreamOrder `0-0`/`0-1`, IDs/MenuID decimal-only; Duration/Delay 9-decimal JSON; precision min/max = overall/9600
 - MPEG-TS Menu JSON: `List_StreamKind`/`List_StreamPos`, Service* fields, PMT `pointer_field` + `section_length` in `extra`
 - MPEG-PS JSON: FirstPacketOrder ignores Menu streams (video/audio start at 0)
-- MPEG-PS JSON: GOP-only header-byte bitrate uses small duration bias (0.99818) to match MediaInfo (sample_ac3.vob)
+- MPEG-PS: PTS tracker stores first PTS; text (RLE) Delay/Duration use first->last PTS span + MuxingMode=DVD-Video + Video_Delay
+- MPEG-PS: video duration uses zero-segment half-frame seed; bitrate uses framecount/fps on reset streams and +1 frame when no resets
+- MPEG-PS: JSON stream size uses full bytes (no padding subtraction); GOP-only bitrate mode = Constant
 - AVI JSON: StreamSize uses raw bytes; BitRate uses stream rate/scale duration (not kb/s-rounded); General JSON carries OverallBitRate/FrameCount/StreamSize
 - MPEG Video JSON: no StreamOrder; BitRate uses JSON-rounded Duration; Delay_Settings from GOP header; BufferSize + intra_dc_precision in `extra`
 - JSON field order: Delay_Settings between Delay and Delay_DropFrame; Format_Settings only for General

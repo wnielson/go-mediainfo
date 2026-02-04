@@ -20,6 +20,8 @@ type mpeg2VideoInfo struct {
 	BVOP              *bool
 	Matrix            string
 	GOPLength         int
+	GOPVariable       bool
+	GOPLengthFirst    int
 	GOPOpenClosed     string
 	GOPFirstClosed    string
 	GOPDropFrame      *bool
@@ -41,9 +43,12 @@ type mpeg2VideoParser struct {
 	info            mpeg2VideoInfo
 	currentGOPCount int
 	sawGOP          bool
+	gopLength       int
+	gopVariable     bool
 	firstGOPClosed  *bool
 	anyOpenGOP      bool
 	gotSeqExt       bool
+	sawSequence     bool
 }
 
 func (p *mpeg2VideoParser) consume(data []byte) {
@@ -75,6 +80,7 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 	if len(data) < 8 {
 		return
 	}
+	p.sawSequence = true
 	br := newBitReader(data)
 	width := br.readBitsValue(12)
 	height := br.readBitsValue(12)
@@ -104,8 +110,20 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 	}
 	loadNonIntra := br.readBitsValue(1)
 	if loadNonIntra == 1 {
+		matrix := make([]byte, 0, 64)
 		for i := 0; i < 64; i++ {
-			_ = br.readBitsValue(8)
+			value := br.readBitsValue(8)
+			if len(matrix) < 64 {
+				matrix = append(matrix, byte(value))
+			}
+		}
+		if p.info.MatrixData == "" && len(matrix) == 64 {
+			var builder strings.Builder
+			builder.Grow(128)
+			for _, b := range matrix {
+				fmt.Fprintf(&builder, "%02X", b)
+			}
+			p.info.MatrixData = builder.String()
 		}
 	}
 
@@ -140,9 +158,12 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 		p.info.BitDepth = "8 bits"
 	}
 	if bitRateValue != 0x3FFFF {
-		p.info.MaxBitRateKbps = int64(bitRateValue*400) / 1000
+		maxKbps := int64(bitRateValue*400) / 1000
+		if maxKbps > p.info.MaxBitRateKbps {
+			p.info.MaxBitRateKbps = maxKbps
+		}
 		if p.info.BitRateMode == "" {
-			p.info.BitRateMode = "Constant"
+			p.info.BitRateMode = "Variable"
 		}
 	} else if p.info.BitRateMode == "" {
 		p.info.BitRateMode = "Variable"
@@ -172,7 +193,7 @@ func (p *mpeg2VideoParser) parseExtension(data []byte) {
 		p.info.Version = "Version 2"
 		if progressive == 1 {
 			p.info.ScanType = "Progressive"
-		} else {
+		} else if p.info.ScanType == "" {
 			p.info.ScanType = "Interlaced"
 		}
 		p.info.ChromaSubsampling = mapMPEG2Chroma(chromaFormat)
@@ -203,7 +224,11 @@ func (p *mpeg2VideoParser) parseGOPHeader(data []byte) {
 	broken := br.readBitsValue(1)
 
 	if p.info.TimeCode == "" {
-		p.info.TimeCode = fmt.Sprintf("%02d:%02d:%02d:%02d", hours, minutes, seconds, pictures)
+		sep := ":"
+		if dropFrame == 1 {
+			sep = ";"
+		}
+		p.info.TimeCode = fmt.Sprintf("%02d:%02d:%02d%s%02d", hours, minutes, seconds, sep, pictures)
 		p.info.TimeCodeSource = "Group of pictures header"
 	}
 	if p.info.TimeCodeSource == "" {
@@ -234,8 +259,12 @@ func (p *mpeg2VideoParser) parseGOPHeader(data []byte) {
 		p.anyOpenGOP = true
 	}
 
-	if p.sawGOP && p.currentGOPCount > 0 && p.info.GOPLength == 0 {
-		p.info.GOPLength = p.currentGOPCount
+	if p.sawGOP && p.currentGOPCount > 0 {
+		if p.gopLength == 0 {
+			p.gopLength = p.currentGOPCount
+		} else if p.currentGOPCount != p.gopLength {
+			p.gopVariable = true
+		}
 	}
 	p.currentGOPCount = 0
 	p.sawGOP = true
@@ -258,8 +287,15 @@ func (p *mpeg2VideoParser) parsePictureHeader(data []byte) {
 }
 
 func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
-	if p.info.GOPLength == 0 && p.currentGOPCount > 0 {
+	if p.gopVariable {
+		p.info.GOPVariable = true
+	} else if p.gopLength > 0 {
+		p.info.GOPLength = p.gopLength
+	} else if p.currentGOPCount > 0 {
 		p.info.GOPLength = p.currentGOPCount
+	}
+	if p.info.GOPLengthFirst == 0 && p.gopLength > 0 {
+		p.info.GOPLengthFirst = p.gopLength
 	}
 	if p.info.BVOP == nil {
 		val := false

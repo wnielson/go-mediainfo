@@ -51,14 +51,20 @@ func buildJSONGeneralFields(report Report) []jsonKV {
 		}
 	}
 	if report.Ref != "" {
-		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(report.Ref)), ".")
+		ext := strings.TrimPrefix(filepath.Ext(report.Ref), ".")
 		if ext != "" {
 			fields = append(fields, jsonKV{Key: "FileExtension", Val: ext})
 		}
 		if size := fileSizeBytes(report.Ref); size > 0 {
 			fields = append(fields, jsonKV{Key: "FileSize", Val: strconv.FormatInt(size, 10)})
 		}
-		if _, _, modifiedUTC, modifiedLocal, ok := fileTimes(report.Ref); ok {
+		if createdUTC, createdLocal, modifiedUTC, modifiedLocal, ok := fileTimes(report.Ref); ok {
+			if createdUTC != "" {
+				fields = append(fields, jsonKV{Key: "File_Created_Date", Val: createdUTC})
+			}
+			if createdLocal != "" {
+				fields = append(fields, jsonKV{Key: "File_Created_Date_Local", Val: createdLocal})
+			}
 			fields = append(fields, jsonKV{Key: "File_Modified_Date", Val: modifiedUTC})
 			fields = append(fields, jsonKV{Key: "File_Modified_Date_Local", Val: modifiedLocal})
 		}

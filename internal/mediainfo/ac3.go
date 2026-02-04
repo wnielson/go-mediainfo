@@ -14,6 +14,8 @@ type ac3Info struct {
 	bsmod       int
 	acmod       int
 	lfeon       int
+	dsurmod     int
+	hasDsurmod  bool
 	serviceKind string
 	frameRate   float64
 	spf         int
@@ -132,6 +134,14 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 				info.hasSurmixlev = true
 			}
 		}
+	}
+	if acmod == 2 {
+		dsurmod, ok := br.readBits(2)
+		if !ok {
+			return info, 0, false
+		}
+		info.dsurmod = int(dsurmod)
+		info.hasDsurmod = true
 	}
 	lfeonVal, ok := br.readBits(1)
 	if !ok {
@@ -271,6 +281,8 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		bsmod:         int(bsmod),
 		acmod:         int(acmod),
 		lfeon:         int(lfeonVal),
+		dsurmod:       info.dsurmod,
+		hasDsurmod:    info.hasDsurmod,
 		serviceKind:   ac3ServiceKind(int(bsmod)),
 		frameRate:     frameRate,
 		spf:           spf,
@@ -473,6 +485,10 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 	}
 	if frame.acmod > 0 && info.acmod == 0 {
 		info.acmod = frame.acmod
+	}
+	if frame.hasDsurmod && !info.hasDsurmod {
+		info.dsurmod = frame.dsurmod
+		info.hasDsurmod = true
 	}
 	if frame.lfeon > 0 && info.lfeon == 0 {
 		info.lfeon = frame.lfeon

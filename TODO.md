@@ -10,6 +10,7 @@
 - Implement MediaInfo JSON/XML/CSV schema parity (raw field names/values, missing fields, exact formatting) where still missing
 - JSON parity: sample set complete (MP4/MKV/TS/AVI/MPEG Video/VOB)
 - MPEG-PS/VOB JSON: expand VOB parity sweep beyond samples (sample.vob + sample_ac3.vob match)
+- MPEG-PS/VOB: verify RLE subtitle Delay/Duration (first/last PTS) on more DVD samples
 - MKV (The.Rookie... WEB-DL) parity complete across text/JSON/XML/CSV
 - DVD: verify EIA-608 timing on more samples (Ask.Me.to.Dance IFO matched)
 - DVD: verify CC frames-before-first-event count vs MediaInfo (currently derived from MPEG-2 picture count)
