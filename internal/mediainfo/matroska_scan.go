@@ -485,9 +485,17 @@ func applyMatroskaStats(info *MatroskaInfo, stats map[uint64]*matroskaTrackStats
 			info.Tracks[i].JSON["StreamSize"] = strconv.FormatInt(stat.dataBytes, 10)
 		}
 		durationSeconds := matroskaStatsDuration(stat)
+		if info.Tracks[i].Kind == StreamVideo && stat.blockCount > 0 {
+			if fps, ok := parseFPS(findField(info.Tracks[i].Fields, "Frame rate")); ok && fps > 0 {
+				durationSeconds = float64(stat.blockCount) / fps
+			}
+		}
 		if durationSeconds > 0 {
+			if info.Tracks[i].Kind == StreamVideo {
+				durationSeconds = math.Ceil(durationSeconds*1000) / 1000
+			}
 			info.Tracks[i].Fields = setFieldValue(info.Tracks[i].Fields, "Duration", formatDuration(durationSeconds))
-			if info.Tracks[i].Kind == StreamText {
+			if info.Tracks[i].Kind == StreamText || info.Tracks[i].Kind == StreamVideo {
 				if info.Tracks[i].JSON == nil {
 					info.Tracks[i].JSON = map[string]string{}
 				}
@@ -513,11 +521,15 @@ func applyMatroskaStats(info *MatroskaInfo, stats map[uint64]*matroskaTrackStats
 			}
 			if durationSeconds > 0 && stat.dataBytes > 0 {
 				bitrate := (float64(stat.dataBytes) * 8) / durationSeconds
-				info.Tracks[i].Fields = setFieldValue(info.Tracks[i].Fields, "Bit rate", formatBitrateSmall(bitrate))
+				if bitrate < 1000 {
+					info.Tracks[i].Fields = setFieldValue(info.Tracks[i].Fields, "Bit rate", fmt.Sprintf("%.0f b/s", math.Floor(bitrate)))
+				} else {
+					info.Tracks[i].Fields = setFieldValue(info.Tracks[i].Fields, "Bit rate", formatBitrateSmall(bitrate))
+				}
 				if info.Tracks[i].JSON == nil {
 					info.Tracks[i].JSON = map[string]string{}
 				}
-				info.Tracks[i].JSON["BitRate"] = strconv.FormatInt(int64(math.Round(bitrate)), 10)
+				info.Tracks[i].JSON["BitRate"] = strconv.FormatInt(int64(bitrate), 10)
 			}
 		}
 		if info.Tracks[i].Kind == StreamVideo {
@@ -530,7 +542,6 @@ func applyMatroskaStats(info *MatroskaInfo, stats map[uint64]*matroskaTrackStats
 			if bitrateDuration > 0 && stat.dataBytes > 0 {
 				bitrate := (float64(stat.dataBytes) * 8) / bitrateDuration
 				info.Tracks[i].Fields = setFieldValue(info.Tracks[i].Fields, "Bit rate", formatBitrate(bitrate))
-				info.Tracks[i].Fields = setFieldValue(info.Tracks[i].Fields, "Bit rate mode", "Constant")
 				if info.Tracks[i].JSON == nil {
 					info.Tracks[i].JSON = map[string]string{}
 				}

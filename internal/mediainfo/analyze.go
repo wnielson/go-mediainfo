@@ -250,6 +250,8 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 			general.JSON["IsStreamable"] = "Yes"
 			var streamSizeSum int64
+			var overallMode string
+			var overallModeField string
 			for _, stream := range streams {
 				if stream.JSON != nil {
 					if value, ok := stream.JSON["StreamSize"]; ok {
@@ -257,11 +259,41 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 							streamSizeSum += parsed
 						}
 					}
+					if overallMode == "" && stream.Kind == StreamVideo {
+						if mode := stream.JSON["BitRate_Mode"]; mode != "" {
+							overallMode = mode
+						}
+					}
 				} else if sizeValue := findField(stream.Fields, "Stream size"); sizeValue != "" {
 					if parsed, ok := parseSizeBytes(sizeValue); ok {
 						streamSizeSum += parsed
 					}
 				}
+				if overallMode == "" && stream.Kind == StreamVideo {
+					if mode := findField(stream.Fields, "Bit rate mode"); mode != "" {
+						overallMode = mapBitrateMode(mode)
+					}
+				}
+				if overallModeField == "" && stream.Kind == StreamVideo {
+					if mode := findField(stream.Fields, "Bit rate mode"); mode != "" {
+						overallModeField = mode
+					} else if mode := stream.JSON["BitRate_Mode"]; mode != "" {
+						switch strings.ToUpper(mode) {
+						case "VBR":
+							overallModeField = "Variable"
+						case "CBR":
+							overallModeField = "Constant"
+						default:
+							overallModeField = mode
+						}
+					}
+				}
+			}
+			if overallMode != "" {
+				general.JSON["OverallBitRate_Mode"] = overallMode
+			}
+			if overallModeField != "" {
+				general.Fields = appendFieldUnique(general.Fields, Field{Name: "Overall bit rate mode", Value: overallModeField})
 			}
 			if streamSizeSum > 0 {
 				remaining := stat.Size() - streamSizeSum
@@ -662,6 +694,21 @@ func parseFPS(value string) (float64, bool) {
 	parsed, err := strconv.ParseFloat(parts[0], 64)
 	if err != nil {
 		return 0, false
+	}
+	for _, part := range parts[1:] {
+		if strings.HasPrefix(part, "(") && strings.HasSuffix(part, ")") {
+			ratio := strings.TrimSuffix(strings.TrimPrefix(part, "("), ")")
+			if ratio != "" {
+				pieces := strings.Split(ratio, "/")
+				if len(pieces) == 2 {
+					num, numErr := strconv.ParseFloat(pieces[0], 64)
+					den, denErr := strconv.ParseFloat(pieces[1], 64)
+					if numErr == nil && denErr == nil && den > 0 {
+						return num / den, true
+					}
+				}
+			}
+		}
 	}
 	return parsed, true
 }

@@ -23,10 +23,16 @@ const (
 	mkvIDErrorDetection    = 0x6BAA
 	mkvIDTracks            = 0x1654AE6B
 	mkvIDTags              = 0x1254C367
+	mkvIDChapters          = 0x1043A770
 	mkvIDTag               = 0x7373
 	mkvIDSimpleTag         = 0x67C8
 	mkvIDTagName           = 0x45A3
 	mkvIDTagString         = 0x4487
+	mkvIDEditionEntry      = 0x45B9
+	mkvIDChapterAtom       = 0xB6
+	mkvIDChapterTimeStart  = 0x91
+	mkvIDChapterDisplay    = 0x80
+	mkvIDChapString        = 0x85
 	mkvIDTrackEntry        = 0xAE
 	mkvIDTrackNumber       = 0xD7
 	mkvIDTrackUID          = 0x73C5
@@ -185,6 +191,7 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 	info := MatroskaInfo{}
 	var encoders []string
 	var segmentFields []Field
+	var chaptersPayloads [][]byte
 	pos := 0
 	for pos < len(buf) {
 		id, idLen, ok := readVintID(buf, pos)
@@ -220,6 +227,9 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 		if id == mkvIDTags {
 			encoders = append(encoders, parseMatroskaEncoders(buf[dataStart:dataEnd])...)
 		}
+		if id == mkvIDChapters {
+			chaptersPayloads = append(chaptersPayloads, buf[dataStart:dataEnd])
+		}
 		pos = dataEnd
 	}
 	if len(encoders) > 0 && len(info.Tracks) > 0 {
@@ -230,6 +240,41 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 	}
 	if findField(info.General, "ErrorDetectionType") == "" && matroskaHasCRC(buf) {
 		info.General = append(info.General, Field{Name: "ErrorDetectionType", Value: "Per level 1"})
+	}
+	if len(chaptersPayloads) > 0 {
+		scale := info.TimecodeScale
+		if scale == 0 {
+			scale = 1000000
+		}
+		var chapters []matroskaChapter
+		for _, payload := range chaptersPayloads {
+			chapters = append(chapters, parseMatroskaChapters(payload, scale)...)
+		}
+		if len(chapters) > 0 {
+			menu := Stream{
+				Kind:               StreamMenu,
+				JSONRaw:            map[string]string{},
+				JSONSkipStreamOrder: true,
+				JSONSkipComputed:   true,
+			}
+			for i, chapter := range chapters {
+				name := chapter.name
+				if name == "" {
+					name = fmt.Sprintf("Chapter %d", i+1)
+				}
+				menu.Fields = append(menu.Fields, Field{Name: formatMatroskaChapterTimeMs(chapter.startMs), Value: name})
+			}
+			menu.JSONRaw["extra"] = renderMatroskaMenuExtra(chapters)
+			info.Tracks = append(info.Tracks, menu)
+			for i := range info.Tracks {
+				if info.Tracks[i].Kind == StreamVideo {
+					if findField(info.Tracks[i].Fields, "Time code of first frame") == "" {
+						info.Tracks[i].Fields = append(info.Tracks[i].Fields, Field{Name: "Time code of first frame", Value: "00:00:00;00"})
+					}
+					break
+				}
+			}
+		}
 	}
 	if info.Container.HasDuration() || len(info.Tracks) > 0 {
 		return info, true
@@ -266,6 +311,150 @@ func parseMatroskaHeader(buf []byte) []Field {
 		fields = append(fields, Field{Name: "Format version", Value: fmt.Sprintf("Version %d", docTypeVersion)})
 	}
 	return fields
+}
+
+type matroskaChapter struct {
+	startMs int64
+	name    string
+}
+
+func parseMatroskaChapters(buf []byte, timecodeScale uint64) []matroskaChapter {
+	var chapters []matroskaChapter
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		if id == mkvIDEditionEntry {
+			chapters = append(chapters, parseMatroskaEditionEntry(buf[dataStart:dataEnd], timecodeScale)...)
+		}
+		pos = dataEnd
+	}
+	return chapters
+}
+
+func parseMatroskaEditionEntry(buf []byte, timecodeScale uint64) []matroskaChapter {
+	var chapters []matroskaChapter
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		if id == mkvIDChapterAtom {
+			if chapter, ok := parseMatroskaChapterAtom(buf[dataStart:dataEnd], timecodeScale); ok {
+				chapters = append(chapters, chapter)
+			}
+		}
+		pos = dataEnd
+	}
+	return chapters
+}
+
+func parseMatroskaChapterAtom(buf []byte, timecodeScale uint64) (matroskaChapter, bool) {
+	var chapter matroskaChapter
+	var hasStart bool
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		switch id {
+		case mkvIDChapterTimeStart:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				chapter.startMs = int64(value) / 1_000_000
+				hasStart = true
+			}
+		case mkvIDChapterDisplay:
+			if name := parseMatroskaChapterDisplay(buf[dataStart:dataEnd]); name != "" {
+				chapter.name = name
+			}
+		}
+		pos = dataEnd
+	}
+	if hasStart {
+		return chapter, true
+	}
+	return matroskaChapter{}, false
+}
+
+func parseMatroskaChapterDisplay(buf []byte) string {
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		if id == mkvIDChapString {
+			return strings.TrimRight(string(buf[dataStart:dataEnd]), "\x00")
+		}
+		pos = dataEnd
+	}
+	return ""
+}
+
+func formatMatroskaChapterTimeMs(msTotal int64) string {
+	if msTotal < 0 {
+		msTotal = 0
+	}
+	h := msTotal / (3600 * 1000)
+	msTotal -= h * 3600 * 1000
+	m := msTotal / (60 * 1000)
+	msTotal -= m * 60 * 1000
+	s := msTotal / 1000
+	ms := msTotal - s*1000
+	return fmt.Sprintf("%02d:%02d:%02d.%03d", h, m, s, ms)
+}
+
+func renderMatroskaMenuExtra(chapters []matroskaChapter) string {
+	fields := []jsonKV{}
+	for i, chapter := range chapters {
+		name := chapter.name
+		if name == "" {
+			name = fmt.Sprintf("Chapter %d", i+1)
+		}
+		key := "_" + strings.NewReplacer(":", "_", ".", "_").Replace(formatMatroskaChapterTimeMs(chapter.startMs))
+		fields = append(fields, jsonKV{Key: key, Val: name})
+	}
+	return renderJSONObject(fields, false)
 }
 
 func formatSegmentUID(payload []byte) string {
@@ -608,8 +797,8 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 			}
 		}
 		if bitRate > 0 {
-			nominalKbps := int64(math.Round(float64(bitRate) / 1000))
-			fields = append(fields, Field{Name: "Nominal bit rate", Value: formatBitrateKbps(nominalKbps)})
+			fields = append(fields, Field{Name: "Maximum bit rate", Value: formatBitrate(float64(bitRate))})
+			fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
 			if defaultDuration > 0 && displayWidth > 0 && displayHeight > 0 {
 				rate := 1e9 / float64(defaultDuration)
 				if bits := formatBitsPerPixelFrame(float64(bitRate), displayWidth, displayHeight, rate); bits != "" {
@@ -696,6 +885,9 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	if trackUID > 0 {
 		jsonExtras["UniqueID"] = fmt.Sprintf("%d", trackUID)
 	}
+	if bitRate > 0 {
+		jsonExtras["BitRate_Maximum"] = strconv.FormatUint(bitRate, 10)
+	}
 	if languageCode != "" {
 		jsonExtras["Language"] = languageCode
 	}
@@ -750,7 +942,11 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		}
 		if videoInfo.colorRange != "" || videoInfo.colorPrimaries != "" || videoInfo.transferCharacteristics != "" || videoInfo.matrixCoefficients != "" {
 			colorSource := "Container"
-			if matroskaHasStreamColor(videoInfo) {
+			hasStream := matroskaHasStreamColor(videoInfo)
+			hasContainer := matroskaHasContainerColor(videoInfo)
+			if hasStream && hasContainer {
+				colorSource = "Container / Stream"
+			} else if hasStream {
 				colorSource = "Stream"
 			}
 			jsonExtras["colour_description_present"] = "Yes"
@@ -1063,7 +1259,17 @@ func matroskaHasStreamColor(info matroskaVideoInfo) bool {
 		info.matrixSource == "Stream"
 }
 
+func matroskaHasContainerColor(info matroskaVideoInfo) bool {
+	return info.colorRangeSource == "Container" ||
+		info.colorPrimariesSource == "Container" ||
+		info.transferSource == "Container" ||
+		info.matrixSource == "Container"
+}
+
 func matroskaColorSource(value string, fallback string) string {
+	if strings.Contains(fallback, "/") {
+		return fallback
+	}
 	if value != "" {
 		return value
 	}
