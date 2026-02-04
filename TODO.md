@@ -20,3 +20,4 @@
 - Issue status: reported as still present in all versions from 23.07+
 - Next step: reproduce with IFO/BUP/VOB samples + dev snapshot; document delta vs 23.06 and isolate path-based behavior
 - Reproduce with IFO+VOB sample set; compare language/runtime fields and menu/chapter listings across versions
+- Repro (Ask.Me.to.Dance.2022 DVD): `VIDEO_TS/VTS_02_0.IFO` inside VIDEO_TS lacks Language; copy outside VIDEO_TS shows Language=English; `VTS_02_0.BUP` shows Language even inside VIDEO_TS
