@@ -1,6 +1,9 @@
 package mediainfo
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 func buildCCTextStream(entry *psStream, videoDelay float64, videoDuration float64, frameRate float64) *Stream {
 	track, service := selectCCTrack(entry)
@@ -56,8 +59,14 @@ func buildCCTextStream(entry *psStream, videoDelay float64, videoDuration float6
 		end = start
 	}
 	visible := 0.0
+	visibleBase := 0.0
 	if end > start {
-		visible = end - start
+		visibleBase = end - start
+	}
+	if ccRate > 0 && visibleBase > 0 {
+		visible = math.Round(visibleBase*2000) / 2000
+	} else {
+		visible = visibleBase
 	}
 	if visible > 0 {
 		fields = append(fields, Field{Name: "Duration of the visible content", Value: formatDuration(visible)})
@@ -153,10 +162,10 @@ func ccFrameRateForVideo(frameRate float64) float64 {
 		return 0
 	}
 	if frameRate > 23 && frameRate < 24.5 {
-		return 30000.0 / 1001.0
+		return 29.97
 	}
 	if frameRate > 29 && frameRate < 30.5 {
-		return 30000.0 / 1001.0
+		return 29.97
 	}
 	if frameRate > 24.5 && frameRate < 25.5 {
 		return 25.0
