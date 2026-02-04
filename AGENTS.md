@@ -19,6 +19,11 @@ Owner: soup
 - Issue #760 notes: IFO in VIDEO_TS shows VOB-derived streams but loses audio language; same IFO copied elsewhere shows languages; BUP files show old IFO-style info
 - Issue #760: dev snapshots fixed duration, language issue persists when IFO is inside VIDEO_TS; still reported broken in 23.07+
 - Issue #760 repro (Ask.Me.to.Dance.2022 DVD): `VIDEO_TS/VTS_02_0.IFO` lacks Language; copy outside VIDEO_TS shows Language=English; `VTS_02_0.BUP` shows Language even inside VIDEO_TS
+- DVD IFO/BUP: parse IFO/BUP headers for video/audio attrs, chapters, duration; add Menu stream with chapter list
+- DVD JSON: Language uses ISO-639 code (e.g., `en`), text uses full name (e.g., English)
+- DVD JSON: Menu order is Duration, Delay, FrameRate, FrameRate_Num, FrameRate_Den, FrameCount, extra
+- DVD JSON: SamplingCount present for audio; PixelAspectRatio present for video even when computed fields skipped
+- JSON: MediaInfo CLI does not emit File_Created_Date fields in JSON (only modified)
 - `--output` without "=" treated as filename (matches upstream)
 - `--` alone is a no-op (ignored)
 - `--help` prints version line then usage
