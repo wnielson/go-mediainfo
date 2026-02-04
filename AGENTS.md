@@ -26,6 +26,8 @@ Owner: soup
 - JSON: MediaInfo CLI does not emit File_Created_Date fields in JSON (only modified)
 - DVD aggregate (VTS_XX_0.IFO): parse title-set VOBs via streaming MPEG-PS; file size = sum VTS_XX_1..n + IFO (exclude VTS_XX_0.VOB)
 - DVD aggregate JSON: add AC-3 *_String extras + dialnorm_Count; add Source in stream extra
+- DVD CC: detect GA94 user_data in MPEG-2, emit EIA-608 Text stream + JSON fields (MuxingMode_MoreInfo, Duration_* timing, FirstDisplay_*), CC3 for field 2
+- DVD AC-3 text: add numeric+dB duplicate lines + dialnorm/compr counts in aggregate mode
 - `--output` without "=" treated as filename (matches upstream)
 - `--` alone is a no-op (ignored)
 - `--help` prints version line then usage
