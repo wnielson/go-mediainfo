@@ -3,10 +3,11 @@ package mediainfo
 import "fmt"
 
 func buildCCTextStream(entry *psStream, videoDelay float64, videoDuration float64, frameRate float64) *Stream {
-	if entry == nil || !entry.ccFound {
+	track, service := selectCCTrack(entry)
+	if track == nil {
 		return nil
 	}
-	service := ccServiceName(entry.ccService)
+	service = ccServiceName(service)
 	idLabel := fmt.Sprintf("%s-%s", formatID(uint64(entry.id)), service)
 	fields := []Field{
 		{Name: "ID", Value: idLabel},
@@ -18,14 +19,14 @@ func buildCCTextStream(entry *psStream, videoDelay float64, videoDuration float6
 		fields = append(fields, Field{Name: "Duration", Value: formatDuration(videoDuration)})
 	}
 
-	start := ccPTSSeconds(entry.ccFirstDisplayPTS)
+	start := ccPTSSeconds(track.firstDisplayPTS)
 	if start == 0 {
-		start = ccPTSSeconds(entry.ccFirstPTS)
+		start = ccPTSSeconds(track.firstPTS)
 	}
-	if start == 0 && entry.ccFirstFrame > 0 && frameRate > 0 {
-		start = float64(entry.ccFirstFrame) / frameRate
+	if start == 0 && track.firstFrame > 0 && frameRate > 0 {
+		start = float64(track.firstFrame) / frameRate
 	}
-	end := ccPTSSeconds(entry.ccLastPTS)
+	end := ccPTSSeconds(track.lastPTS)
 	if end == 0 {
 		end = start
 	}
@@ -44,12 +45,12 @@ func buildCCTextStream(entry *psStream, videoDelay float64, videoDuration float6
 	}
 	fields = append(fields, Field{Name: "Bit rate mode", Value: "Constant"})
 	fields = append(fields, Field{Name: "Stream size", Value: "0.00 Byte (0%)"})
-	framesBefore := entry.ccFirstFrame
+	framesBefore := track.firstFrame
 	if framesBefore < 0 {
 		framesBefore = 0
 	}
 	fields = append(fields, Field{Name: "Count of frames before first event", Value: fmt.Sprintf("%d", framesBefore)})
-	firstType := entry.ccFirstType
+	firstType := track.firstType
 	if firstType == "" {
 		firstType = "PopOn"
 	}
@@ -72,21 +73,21 @@ func buildCCTextStream(entry *psStream, videoDelay float64, videoDuration float6
 		stream.JSON["Duration"] = formatJSONSeconds(videoDuration)
 	}
 	if visible > 0 {
-		stream.JSON["Duration_Start2End"] = formatJSONSeconds(visible)
+		stream.JSON["Duration_Start2End"] = formatJSONSeconds6(visible)
 	}
-	startCommand := ccPTSSeconds(entry.ccFirstCommandPTS)
+	startCommand := ccPTSSeconds(track.firstCommandPTS)
 	if startCommand == 0 {
 		startCommand = start
 	}
 	if startCommand > 0 {
-		stream.JSON["Duration_Start_Command"] = formatJSONSeconds(startCommand)
+		stream.JSON["Duration_Start_Command"] = formatJSONSeconds6(startCommand)
 	}
 	if start > 0 {
-		stream.JSON["Duration_Start"] = formatJSONSeconds(start)
+		stream.JSON["Duration_Start"] = formatJSONSeconds6(start)
 	}
 	if end > 0 {
-		stream.JSON["Duration_End"] = formatJSONSeconds(end)
-		stream.JSON["Duration_End_Command"] = formatJSONSeconds(end)
+		stream.JSON["Duration_End"] = formatJSONSeconds6(end)
+		stream.JSON["Duration_End_Command"] = formatJSONSeconds6(end)
 	}
 	stream.JSON["BitRate_Mode"] = "CBR"
 	if videoDelay > 0 {
@@ -98,6 +99,19 @@ func buildCCTextStream(entry *psStream, videoDelay float64, videoDuration float6
 	stream.JSON["FirstDisplay_Type"] = firstType
 	stream.JSONRaw["extra"] = renderJSONObject([]jsonKV{{Key: "CaptionServiceName", Val: service}}, false)
 	return &stream
+}
+
+func selectCCTrack(entry *psStream) (*ccTrack, string) {
+	if entry == nil || !entry.ccFound {
+		return nil, ""
+	}
+	if entry.ccEven.found {
+		return &entry.ccEven, "CC3"
+	}
+	if entry.ccOdd.found {
+		return &entry.ccOdd, "CC1"
+	}
+	return nil, ""
 }
 
 func ccPTSSeconds(value uint64) float64 {

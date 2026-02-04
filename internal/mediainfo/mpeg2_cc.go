@@ -20,37 +20,35 @@ func consumeMPEG2Captions(entry *psStream, payload []byte, pts uint64, hasPTS bo
 			if end < 0 {
 				end = len(buf)
 			}
-			if hasCC, ccType, hasCommand, hasDisplay := parseGA94UserData(buf[i+4 : end]); hasCC {
-				framesBefore := entry.videoFrameCount - 1
-				if framesBefore < 0 {
-					framesBefore = 0
-				}
-				if !entry.ccFound {
-					entry.ccFound = true
-					entry.ccFirstFrame = framesBefore
-					if hasPTS {
-						entry.ccFirstPTS = pts
-					}
-				}
-				entry.ccLastFrame = framesBefore
-				if hasPTS {
-					entry.ccLastPTS = pts
-				}
+			if hasCC, ccType, hasCommand, hasDisplay := parseMPEG2UserData(buf[i+4 : end]); hasCC {
+				framesBefore := entry.videoFrameCount
+				entry.ccFound = true
+				track := &entry.ccOdd
 				if ccType == 1 {
-					entry.ccService = "CC3"
-				} else if entry.ccService == "" {
-					entry.ccService = "CC1"
+					track = &entry.ccEven
 				}
-				if hasPTS && hasCommand {
-					if entry.ccFirstCommandPTS == 0 {
-						entry.ccFirstCommandPTS = pts
+				if !track.found {
+					track.found = true
+					if hasPTS {
+						track.firstPTS = pts
 					}
 				}
-				if hasPTS && hasDisplay {
-					if entry.ccFirstDisplayPTS == 0 {
-						entry.ccFirstDisplayPTS = pts
-						entry.ccFirstType = "PopOn"
+				if track.firstFrame < 0 {
+					track.firstFrame = framesBefore
+				}
+				track.lastFrame = framesBefore
+				if hasPTS {
+					track.lastPTS = pts
+				}
+				if hasPTS && hasCommand && track.firstCommandPTS == 0 {
+					track.firstCommandPTS = pts
+				}
+				if hasDisplay && track.firstType == "" {
+					if hasPTS {
+						track.firstDisplayPTS = pts
 					}
+					track.firstFrame = framesBefore
+					track.firstType = "PopOn"
 				}
 			}
 		}
@@ -76,9 +74,10 @@ func parseGA94UserData(data []byte) (bool, int, bool, bool) {
 		return false, 0, false, false
 	}
 	hasCC := false
-	ccType := 0
 	hasCommand := false
 	hasDisplay := false
+	seenType0 := false
+	seenType1 := false
 	for i := 0; i+5 < len(data); i++ {
 		if data[i] != 'G' || data[i+1] != 'A' || data[i+2] != '9' || data[i+3] != '4' {
 			continue
@@ -103,8 +102,12 @@ func parseGA94UserData(data []byte) (bool, int, bool, bool) {
 			ccData2 := data[idx+2] & 0x7F
 			if ccValid && (ccTypeVal == 0 || ccTypeVal == 1) {
 				hasCC = true
-				ccType = ccTypeVal
-				if (ccData1 == 0x14 || ccData1 == 0x1C) && ccData2 >= 0x20 && ccData2 <= 0x2F {
+				if ccTypeVal == 1 {
+					seenType1 = true
+				} else {
+					seenType0 = true
+				}
+				if (ccData1 == 0x14 || ccData1 == 0x1C || ccData1 == 0x15 || ccData1 == 0x1D) && ccData2 >= 0x20 && ccData2 <= 0x2F {
 					hasCommand = true
 					if ccData2 == 0x2F {
 						hasDisplay = true
@@ -114,13 +117,92 @@ func parseGA94UserData(data []byte) (bool, int, bool, bool) {
 			idx += 3
 		}
 	}
-	if hasCC && ccType == 1 {
+	return resolveCCResult(hasCC, seenType0, seenType1, hasCommand, hasDisplay)
+}
+
+func parseDVDUserData(data []byte) (bool, int, bool, bool) {
+	if len(data) < 6 {
+		return false, 0, false, false
+	}
+	if data[0] != 'C' || data[1] != 'C' {
+		return false, 0, false, false
+	}
+	if data[2] != 0x01 {
+		return false, 0, false, false
+	}
+	if data[3] != 0xF8 {
+		return false, 0, false, false
+	}
+
+	flags := data[4]
+	blockCount := int((flags >> 1) & 0x1F)
+	extra := int(flags & 0x01)
+	totalBlocks := blockCount*2 + extra
+	if totalBlocks <= 0 {
+		return false, 0, false, false
+	}
+
+	hasCC := false
+	hasCommand := false
+	hasDisplay := false
+	seenType0 := false
+	seenType1 := false
+	idx := 5
+	for j := 0; j < totalBlocks && idx+2 < len(data); j++ {
+		if idx+3 > len(data) {
+			break
+		}
+		field := data[idx]
+		if (field & 0xFE) != 0xFE {
+			idx += 3
+			continue
+		}
+		odd := (field & 0x01) != 0
+		raw1 := data[idx+1]
+		raw2 := data[idx+2]
+		if raw1 == 0x80 && raw2 == 0x80 {
+			idx += 3
+			continue
+		}
+		ccData1 := raw1 & 0x7F
+		ccData2 := raw2 & 0x7F
+		if ccData1 != 0 || ccData2 != 0 {
+			hasCC = true
+			if odd {
+				seenType1 = true
+			} else {
+				seenType0 = true
+			}
+			if (ccData1 == 0x14 || ccData1 == 0x1C || ccData1 == 0x15 || ccData1 == 0x1D) && ccData2 >= 0x20 && ccData2 <= 0x2F {
+				hasCommand = true
+				if ccData2 == 0x2F {
+					hasDisplay = true
+				}
+			}
+		}
+		idx += 3
+	}
+	return resolveCCResult(hasCC, seenType0, seenType1, hasCommand, hasDisplay)
+}
+
+func parseMPEG2UserData(data []byte) (bool, int, bool, bool) {
+	if hasCC, ccType, hasCommand, hasDisplay := parseGA94UserData(data); hasCC {
+		return hasCC, ccType, hasCommand, hasDisplay
+	}
+	return parseDVDUserData(data)
+}
+
+func resolveCCResult(hasCC bool, seenType0 bool, seenType1 bool, hasCommand bool, hasDisplay bool) (bool, int, bool, bool) {
+	if !hasCC {
+		return false, 0, false, false
+	}
+	if seenType1 {
 		return true, 1, hasCommand, hasDisplay
 	}
-	if hasCC && ccType == 0 {
+	if seenType0 {
 		return true, 0, hasCommand, hasDisplay
 	}
-	return false, 0, false, false
+	return true, 0, hasCommand, hasDisplay
 }
 
 func ccServiceName(name string) string {

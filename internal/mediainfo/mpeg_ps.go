@@ -223,7 +223,8 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 }
 
 type mpegPSOptions struct {
-	dvdExtras bool
+	dvdExtras  bool
+	parseSpeed float64
 }
 
 func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoParsers map[uint16]*mpeg2VideoParser, videoPTS ptsTracker, anyPTS ptsTracker, size int64, opts mpegPSOptions) (ContainerInfo, []Stream, bool) {

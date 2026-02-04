@@ -543,6 +543,10 @@ func formatJSONSeconds(value float64) string {
 	return fmt.Sprintf("%.3f", value)
 }
 
+func formatJSONSeconds6(value float64) string {
+	return fmt.Sprintf("%.6f", value)
+}
+
 func parseBitrateBps(value string) (int64, bool) {
 	tokens := strings.Fields(value)
 	if len(tokens) < 2 {

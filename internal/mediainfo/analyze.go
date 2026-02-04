@@ -537,7 +537,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 		}
 	case "DVD Video":
-		if parsed, ok := ParseDVDVideo(path, file, stat.Size()); ok {
+		if parsed, ok := ParseDVDVideo(path, file, stat.Size(), opts); ok {
 			info = parsed.Container
 			if parsed.FileSize > 0 {
 				general.Fields = setFieldValue(general.Fields, "File size", formatBytes(parsed.FileSize))

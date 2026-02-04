@@ -55,7 +55,7 @@ type dvdAudioAttrs struct {
 	LanguageCode string
 }
 
-func ParseDVDVideo(path string, file *os.File, size int64) (dvdInfo, bool) {
+func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) (dvdInfo, bool) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return dvdInfo{}, false
 	}
@@ -124,7 +124,7 @@ func ParseDVDVideo(path string, file *os.File, size int64) (dvdInfo, bool) {
 			if ifoInfo, err := os.Stat(path); err == nil {
 				info.FileSize += ifoInfo.Size()
 			}
-			if parsedInfo, parsedStreams, ok := ParseMPEGPSFiles(vobPaths, info.FileSize, mpegPSOptions{dvdExtras: true}); ok {
+			if parsedInfo, parsedStreams, ok := ParseMPEGPSFiles(vobPaths, info.FileSize, mpegPSOptions{dvdExtras: true, parseSpeed: opts.ParseSpeed}); ok {
 				streams = mergeDVDTitleSetStreams(parsedStreams, dvdTitleSetSource(base))
 				titleSetParsed = len(streams) > 0
 				if parsedInfo.DurationSeconds > 0 && durationSeconds == 0 {

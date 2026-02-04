@@ -37,13 +37,18 @@ type psStream struct {
 	videoCCCarry      []byte
 	videoFrameCount   int
 	ccFound           bool
-	ccFirstFrame      int
-	ccLastFrame       int
-	ccFirstPTS        uint64
-	ccLastPTS         uint64
-	ccFirstCommandPTS uint64
-	ccFirstDisplayPTS uint64
-	ccService         string
-	ccFirstType       string
+	ccOdd             ccTrack
+	ccEven            ccTrack
 	firstPacketOrder  int
+}
+
+type ccTrack struct {
+	found           bool
+	firstFrame      int
+	lastFrame       int
+	firstPTS        uint64
+	lastPTS         uint64
+	firstCommandPTS uint64
+	firstDisplayPTS uint64
+	firstType       string
 }

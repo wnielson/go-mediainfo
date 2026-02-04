@@ -27,6 +27,9 @@ Owner: soup
 - DVD aggregate (VTS_XX_0.IFO): parse title-set VOBs via streaming MPEG-PS; file size = sum VTS_XX_1..n + IFO (exclude VTS_XX_0.VOB)
 - DVD aggregate JSON: add AC-3 *_String extras + dialnorm_Count; add Source in stream extra
 - DVD CC: detect GA94 user_data in MPEG-2, emit EIA-608 Text stream + JSON fields (MuxingMode_MoreInfo, Duration_* timing, FirstDisplay_*), CC3 for field 2
+- DVD CC (DVD-Video): user_data header is "CC" (0x4343), type 0x01, caption_block_size 0xF8; caption blocks carry odd/even field flag for CC1/CC3
+- DVD MPEG-PS sampling: when ParseSpeed < 1 and dvdExtras, sample includes middle chunk and min 16 MiB window to capture CC
+- DVD CC mapping: DVD user_data odd-field captions map to CC3 (matches MediaInfo)
 - DVD AC-3 text: add numeric+dB duplicate lines + dialnorm/compr counts in aggregate mode
 - `--output` without "=" treated as filename (matches upstream)
 - `--` alone is a no-op (ignored)

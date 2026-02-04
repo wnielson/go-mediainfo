@@ -350,7 +350,18 @@ func (p *psStreamParser) ensureStream(streamID byte, subID byte, kind StreamKind
 	key := psStreamKey(streamID, subID)
 	entry := p.streams[key]
 	if entry == nil {
-		entry = &psStream{id: streamID, subID: subID, kind: kind, format: format, firstPacketOrder: -1, videoLastStartPos: -1}
+		entry = &psStream{
+			id:               streamID,
+			subID:            subID,
+			kind:             kind,
+			format:           format,
+			firstPacketOrder: -1,
+			videoLastStartPos: -1,
+		}
+		entry.ccOdd.firstFrame = -1
+		entry.ccOdd.lastFrame = -1
+		entry.ccEven.firstFrame = -1
+		entry.ccEven.lastFrame = -1
 		p.streams[key] = entry
 		p.streamOrder = append(p.streamOrder, key)
 	}
@@ -410,8 +421,7 @@ func ParseMPEGPSFiles(paths []string, size int64, opts mpegPSOptions) (Container
 		if err != nil {
 			return ContainerInfo{}, nil, false
 		}
-		reader := bufio.NewReaderSize(file, 1<<20)
-		if parser.parseReader(reader) {
+		if parseMPEGPSFileSample(parser, file, opts) {
 			parsedAny = true
 		}
 		_ = file.Close()
@@ -420,4 +430,62 @@ func ParseMPEGPSFiles(paths []string, size int64, opts mpegPSOptions) (Container
 		return ContainerInfo{}, nil, false
 	}
 	return finalizeMPEGPS(parser.streams, parser.streamOrder, parser.videoParsers, parser.videoPTS, parser.anyPTS, size, opts)
+}
+
+func parseMPEGPSFileSample(parser *psStreamParser, file *os.File, opts mpegPSOptions) bool {
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	size := info.Size()
+	if size <= 0 {
+		return false
+	}
+	reader := func(r io.Reader) bool {
+		buf := bufio.NewReaderSize(r, 1<<20)
+		return parser.parseReader(buf)
+	}
+
+	parseSpeed := opts.parseSpeed
+	if parseSpeed == 0 {
+		parseSpeed = 1
+	}
+	if parseSpeed >= 1 {
+		return reader(file)
+	}
+
+	sampleSize := int64(64 << 20)
+	if parseSpeed > 0 && parseSpeed < 1 {
+		sampleSize = int64(float64(sampleSize) * parseSpeed)
+		if sampleSize < 4<<20 {
+			sampleSize = 4 << 20
+		}
+	}
+	if opts.dvdExtras && sampleSize < 16<<20 {
+		sampleSize = 16 << 20
+	}
+	if size <= sampleSize {
+		return reader(file)
+	}
+
+	parsedAny := false
+	first := io.NewSectionReader(file, 0, sampleSize)
+	if reader(first) {
+		parsedAny = true
+	}
+	if size > sampleSize*2 {
+		if opts.dvdExtras {
+			mid := (size - sampleSize) / 2
+			middle := io.NewSectionReader(file, mid, sampleSize)
+			if reader(middle) {
+				parsedAny = true
+			}
+		}
+		start := size - sampleSize
+		last := io.NewSectionReader(file, start, sampleSize)
+		if reader(last) {
+			parsedAny = true
+		}
+	}
+	return parsedAny
 }
