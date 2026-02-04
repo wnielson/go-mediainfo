@@ -110,6 +110,9 @@ func renderJSONTrack(fields []jsonKV) string {
 	if len(fields) > 2 && fields[1].Key == "@typeorder" && fields[2].Key == "StreamOrder" {
 		inlineCount = 3
 	}
+	if len(fields) > 2 && fields[1].Key == "@typeorder" && fields[2].Key == "ID" {
+		inlineCount = 3
+	}
 	for i, field := range fields {
 		if i > 0 {
 			if i < inlineCount {

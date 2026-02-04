@@ -5,6 +5,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -663,8 +665,12 @@ func AnalyzeFiles(paths []string) ([]Report, int, error) {
 }
 
 func AnalyzeFilesWithOptions(paths []string, opts AnalyzeOptions) ([]Report, int, error) {
-	reports := make([]Report, 0, len(paths))
-	for _, path := range paths {
+	expanded, err := expandPaths(paths)
+	if err != nil {
+		return nil, 0, err
+	}
+	reports := make([]Report, 0, len(expanded))
+	for _, path := range expanded {
 		report, err := AnalyzeFileWithOptions(path, opts)
 		if err != nil {
 			return nil, 0, fmt.Errorf("%s: %w", path, err)
@@ -672,6 +678,36 @@ func AnalyzeFilesWithOptions(paths []string, opts AnalyzeOptions) ([]Report, int
 		reports = append(reports, report)
 	}
 	return reports, len(reports), nil
+}
+
+func expandPaths(paths []string) ([]string, error) {
+	expanded := make([]string, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			expanded = append(expanded, path)
+			continue
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			names = append(names, entry.Name())
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			expanded = append(expanded, filepath.Join(path, name))
+		}
+	}
+	return expanded, nil
 }
 
 func parsePixels(value string) (uint64, bool) {

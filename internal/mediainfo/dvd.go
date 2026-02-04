@@ -55,6 +55,19 @@ type dvdAudioAttrs struct {
 	LanguageCode string
 }
 
+type dvdSubpicAttrs struct {
+	Language     string
+	LanguageCode string
+}
+
+type dvdMenuLists struct {
+	audio       string
+	sub43       string
+	subWide     string
+	subLetter   string
+	subPanScan  string
+}
+
 func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) (dvdInfo, bool) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return dvdInfo{}, false
@@ -104,6 +117,8 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 	var durationSeconds float64
 	var chapterStarts []int64
 	var menuStream *Stream
+	var audioAttrs []dvdAudioAttrs
+	var subpicAttrs []dvdSubpicAttrs
 	if isVTS {
 		pttOffset := dvdPointer(data, dvdPTTSRPTPointerOff)
 		pgcOffset := dvdPointer(data, dvdPGCIPointerOff)
@@ -114,6 +129,11 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 			info.Container.DurationSeconds = durationSeconds
 			generalFields = append(generalFields, Field{Name: "Duration", Value: formatDVDDuration(durationSeconds)})
 		}
+		audioAttrs = parseDVDAudioAttrs(data, dvdAudioCountVTSOffset, dvdAudioAttrVTSOffset)
+		subpicAttrs = parseDVDSubpicAttrs(data, dvdSubpicCountVTSOff, dvdSubpicCountVTSOff+2)
+	} else if isVMG {
+		audioAttrs = parseDVDAudioAttrs(data, dvdAudioCountMenuOffset, dvdAudioAttrMenuOffset)
+		subpicAttrs = parseDVDSubpicAttrs(data, dvdSubpicCountMenuOff, dvdSubpicCountMenuOff+2)
 	}
 
 	streams := []Stream{}
@@ -239,12 +259,12 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 		videoStream.JSON["ID"] = "224"
 		streams = append(streams, videoStream)
 
-		if isVTS {
-			audioAttrs := parseDVDAudioAttrs(data, dvdAudioCountVTSOffset, dvdAudioAttrVTSOffset)
-			if len(audioAttrs) > 0 {
-				audio := audioAttrs[0]
+		if len(audioAttrs) > 0 {
+			for i, audio := range audioAttrs {
 				audioFields := []Field{}
-				audioFields = append(audioFields, Field{Name: "ID", Value: "189 (0xBD)-128 (0x80)"})
+				if isVTS {
+					audioFields = append(audioFields, Field{Name: "ID", Value: fmt.Sprintf("189 (0xBD)-%d (0x%X)", 128+i, 0x80+i)})
+				}
 				if audio.Format != "" {
 					audioFields = append(audioFields, Field{Name: "Format", Value: audio.Format})
 				}
@@ -265,7 +285,7 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 				if audio.Language != "" && !suppressLanguage {
 					audioFields = append(audioFields, Field{Name: "Language", Value: audio.Language})
 				}
-				if !isBUP {
+				if isVTS && !isBUP {
 					if source := dvdTitleSetSource(base); source != "" {
 						audioFields = append(audioFields, Field{Name: "Source", Value: source})
 					}
@@ -281,18 +301,41 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 				if audio.LanguageCode != "" && !suppressLanguage {
 					audioStream.JSON["Language"] = audio.LanguageCode
 				}
-				audioStream.JSON["ID"] = "189-128"
+				if isVTS {
+					audioStream.JSON["ID"] = fmt.Sprintf("189-%d", 128+i)
+				}
 				streams = append(streams, audioStream)
 			}
 		}
-	}
 
-	if isVMG {
-		streams = append(streams, Stream{Kind: StreamText, Fields: []Field{
-			{Name: "Format", Value: "RLE"},
-			{Name: "Format/Info", Value: "Run-length encoding"},
-			{Name: "Bit depth", Value: "2 bits"},
-		}, JSONSkipStreamOrder: true, JSONSkipComputed: true})
+		if len(subpicAttrs) > 0 {
+			for i, subpic := range subpicAttrs {
+				textFields := []Field{}
+				if isVTS {
+					textFields = append(textFields, Field{Name: "ID", Value: fmt.Sprintf("189 (0xBD)-%d (0x%X)", 32+i, 0x20+i)})
+				}
+				textFields = append(textFields, Field{Name: "Format", Value: "RLE"})
+				textFields = append(textFields, Field{Name: "Format/Info", Value: "Run-length encoding"})
+				if durationSeconds > 0 {
+					textFields = append(textFields, Field{Name: "Duration", Value: formatDVDDuration(durationSeconds)})
+				}
+				textFields = append(textFields, Field{Name: "Bit depth", Value: "2 bits"})
+				if subpic.Language != "" && !aggregateMode {
+					textFields = append(textFields, Field{Name: "Language", Value: subpic.Language})
+				}
+				textStream := Stream{Kind: StreamText, Fields: textFields, JSON: map[string]string{}, JSONSkipStreamOrder: true, JSONSkipComputed: true}
+				if durationSeconds > 0 {
+					textStream.JSON["Duration"] = formatJSONSeconds(durationSeconds)
+				}
+				if subpic.LanguageCode != "" && !aggregateMode {
+					textStream.JSON["Language"] = subpic.LanguageCode
+				}
+				if isVTS {
+					textStream.JSON["ID"] = fmt.Sprintf("189-%d", 32+i)
+				}
+				streams = append(streams, textStream)
+			}
+		}
 	}
 
 	if len(chapterStarts) > 0 && durationSeconds > 0 {
@@ -300,7 +343,15 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 		for i, startMs := range chapterStarts {
 			menuFields = append(menuFields, Field{Name: formatDVDChapterTimeMs(startMs), Value: fmt.Sprintf("Chapter %d", i+1)})
 		}
-		menuFields = append(menuFields, Field{Name: "List (Audio)", Value: "0"})
+		if len(audioAttrs) > 0 {
+			menuFields = append(menuFields, Field{Name: "List (Audio)", Value: dvdIndexList(len(audioAttrs))})
+		}
+		if len(subpicAttrs) > 0 {
+			menuFields = append(menuFields, Field{Name: "List (Subtitles 4/3)", Value: dvdZeroList(len(subpicAttrs))})
+			menuFields = append(menuFields, Field{Name: "  Wide)", Value: dvdIndexList(len(subpicAttrs))})
+			menuFields = append(menuFields, Field{Name: "  Letterbox)", Value: dvdIndexList(len(subpicAttrs))})
+			menuFields = append(menuFields, Field{Name: "  Pan&Scan)", Value: dvdZeroList(len(subpicAttrs))})
+		}
 		if isVTS && !isBUP {
 			if source := dvdTitleSetSource(base); source != "" {
 				menuFields = append(menuFields, Field{Name: "Source", Value: source})
@@ -313,7 +364,7 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 		menu.JSON["FrameRate_Num"] = "30"
 		menu.JSON["FrameRate_Den"] = "1"
 		menu.JSON["FrameCount"] = strconv.FormatInt(int64(durationSeconds*30+0.5), 10)
-		menu.JSONRaw["extra"] = renderDVDMenuExtra(chapterStarts)
+		menu.JSONRaw["extra"] = renderDVDMenuExtra(chapterStarts, dvdMenuListsFromCounts(len(audioAttrs), len(subpicAttrs)))
 		menuStream = &menu
 	}
 
@@ -401,11 +452,11 @@ func parseDVDVideoAttrs(data []byte, offset int) dvdVideoAttrs {
 }
 
 func parseDVDAudioAttrs(data []byte, countOffset int, attrOffset int) []dvdAudioAttrs {
-	if countOffset >= len(data) || attrOffset >= len(data) {
+	if countOffset+2 > len(data) || attrOffset >= len(data) {
 		return nil
 	}
-	count := int(data[countOffset]) + 1
-	if count < 0 {
+	count := dvdAttrCount(data, countOffset)
+	if count <= 0 {
 		return nil
 	}
 	attrs := []dvdAudioAttrs{}
@@ -418,7 +469,7 @@ func parseDVDAudioAttrs(data []byte, countOffset int, attrOffset int) []dvdAudio
 		b1 := data[off+1]
 		code := (b0 >> 5) & 0x07
 		format, formatInfo := dvdAudioFormat(code)
-		lang := strings.TrimSpace(string(data[off+2 : off+4]))
+		lang := dvdTrimLang(data[off+2 : off+4])
 		sampleCode := (b1 >> 4) & 0x03
 		sampleRate := dvdAudioSampleRate(sampleCode)
 		channels := int(b1&0x07) + 1
@@ -430,6 +481,29 @@ func parseDVDAudioAttrs(data []byte, countOffset int, attrOffset int) []dvdAudio
 			SampleRate:   sampleRate,
 			Language:     formatLanguage(lang),
 			LanguageCode: langCode,
+		})
+	}
+	return attrs
+}
+
+func parseDVDSubpicAttrs(data []byte, countOffset int, attrOffset int) []dvdSubpicAttrs {
+	if countOffset+2 > len(data) || attrOffset >= len(data) {
+		return nil
+	}
+	count := dvdAttrCount(data, countOffset)
+	if count <= 0 {
+		return nil
+	}
+	attrs := []dvdSubpicAttrs{}
+	for i := 0; i < count; i++ {
+		off := attrOffset + i*6
+		if off+6 > len(data) {
+			break
+		}
+		lang := dvdTrimLang(data[off+2 : off+4])
+		attrs = append(attrs, dvdSubpicAttrs{
+			Language:     formatLanguage(lang),
+			LanguageCode: normalizeLanguageCode(lang),
 		})
 	}
 	return attrs
@@ -474,6 +548,49 @@ func dvdPointer(data []byte, offset int) int {
 		return 0
 	}
 	return pos
+}
+
+func dvdAttrCount(data []byte, offset int) int {
+	if offset+2 > len(data) {
+		return 0
+	}
+	return int(binary.BigEndian.Uint16(data[offset : offset+2]))
+}
+
+func dvdTrimLang(raw []byte) string {
+	return strings.TrimSpace(strings.TrimRight(string(raw), "\x00"))
+}
+
+func dvdIndexList(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	values := make([]string, count)
+	for i := 0; i < count; i++ {
+		values[i] = strconv.Itoa(i)
+	}
+	return strings.Join(values, " / ")
+}
+
+func dvdZeroList(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	values := make([]string, count)
+	for i := 0; i < count; i++ {
+		values[i] = "0"
+	}
+	return strings.Join(values, " / ")
+}
+
+func dvdMenuListsFromCounts(audioCount, subpicCount int) dvdMenuLists {
+	return dvdMenuLists{
+		audio:      dvdIndexList(audioCount),
+		sub43:      dvdZeroList(subpicCount),
+		subWide:    dvdIndexList(subpicCount),
+		subLetter:  dvdIndexList(subpicCount),
+		subPanScan: dvdZeroList(subpicCount),
+	}
 }
 
 func parseDVDChapters(data []byte, pttOffset int, pgcOffset int) (float64, []int64) {
@@ -531,7 +648,8 @@ func parseDVDChapters(data []byte, pttOffset int, pgcOffset int) (float64, []int
 		return 0, nil
 	}
 
-	durationMs := dvdTimeToMilliseconds(data[pgcBase+4 : pgcBase+8])
+	durationTicks := dvdTimeToTicks(data[pgcBase+4 : pgcBase+8])
+	durationMs := dvdTicksToMilliseconds(durationTicks)
 	duration := float64(durationMs) / 1000.0
 	programCount := int(data[pgcBase+2])
 	cellCount := int(data[pgcBase+3])
@@ -554,7 +672,7 @@ func parseDVDChapters(data []byte, pttOffset int, pgcOffset int) (float64, []int
 		if entryStart+8 > len(data) {
 			break
 		}
-		cellTimes = append(cellTimes, dvdTimeToMilliseconds(data[entryStart+4:entryStart+8]))
+		cellTimes = append(cellTimes, dvdTimeToTicks(data[entryStart+4:entryStart+8]))
 	}
 
 	starts := []int64{}
@@ -570,11 +688,11 @@ func parseDVDChapters(data []byte, pttOffset int, pgcOffset int) (float64, []int
 		if cellIdx < 0 || cellIdx > len(cellTimes) {
 			continue
 		}
-		var start int64
+		var startTicks int64
 		for i := 0; i < cellIdx && i < len(cellTimes); i++ {
-			start += cellTimes[i]
+			startTicks += cellTimes[i]
 		}
-		starts = append(starts, start)
+		starts = append(starts, dvdTicksToMilliseconds(startTicks))
 	}
 	return duration, starts
 }
@@ -588,6 +706,11 @@ func dvdTimeToSeconds(b []byte) float64 {
 }
 
 func dvdTimeToMilliseconds(b []byte) int64 {
+	ticks := dvdTimeToTicks(b)
+	return dvdTicksToMilliseconds(ticks)
+}
+
+func dvdTimeToTicks(b []byte) int64 {
 	if len(b) < 4 {
 		return 0
 	}
@@ -602,6 +725,13 @@ func dvdTimeToMilliseconds(b []byte) int64 {
 		ticks += int64(frame) * 3600
 	case 3:
 		ticks += int64(frame) * 3000
+	}
+	return ticks
+}
+
+func dvdTicksToMilliseconds(ticks int64) int64 {
+	if ticks <= 0 {
+		return 0
 	}
 	return (ticks*1000 + 45000) / 90000
 }
@@ -649,13 +779,27 @@ func formatDVDFrameRate(rate float64) string {
 	return formatFrameRateWithRatio(rate)
 }
 
-func renderDVDMenuExtra(chapterStarts []int64) string {
+func renderDVDMenuExtra(chapterStarts []int64, lists dvdMenuLists) string {
 	fields := []jsonKV{}
 	for i, startMs := range chapterStarts {
 		key := "_" + strings.NewReplacer(":", "_", ".", "_").Replace(formatDVDChapterTimeMs(startMs))
 		fields = append(fields, jsonKV{Key: key, Val: fmt.Sprintf("Chapter %d", i+1)})
 	}
-	fields = append(fields, jsonKV{Key: "List_Audio", Val: "0"})
+	if lists.audio != "" {
+		fields = append(fields, jsonKV{Key: "List_Audio", Val: lists.audio})
+	}
+	if lists.sub43 != "" {
+		fields = append(fields, jsonKV{Key: "List_Subtitles_4_3", Val: lists.sub43})
+	}
+	if lists.subWide != "" {
+		fields = append(fields, jsonKV{Key: "List_Subtitles_Wide", Val: lists.subWide})
+	}
+	if lists.subLetter != "" {
+		fields = append(fields, jsonKV{Key: "List_Subtitles_Letterbox", Val: lists.subLetter})
+	}
+	if lists.subPanScan != "" {
+		fields = append(fields, jsonKV{Key: "List_Subtitles_PanScan", Val: lists.subPanScan})
+	}
 	return renderJSONObject(fields, false)
 }
 

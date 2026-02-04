@@ -3,6 +3,9 @@ package mediainfo
 import "sort"
 
 func sortFields(kind StreamKind, fields []Field) {
+	if kind == StreamMenu {
+		return
+	}
 	order := streamFieldOrder
 	if kind == StreamGeneral {
 		order = generalFieldOrder
