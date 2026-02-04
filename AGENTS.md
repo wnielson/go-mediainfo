@@ -125,6 +125,11 @@ Owner: soup
 - MPEG-PS AC-3: buffer across PES payloads; use AC-3 frame size table + next-sync validation; parse dialog normalization/compr/cmixlev/surmixlev/mixlevel/roomtyp + dialnorm stats
 - AC-3 `compr` dB uses heavy dynamic range scale `pow(2, v) * ((code & 0xF) | 0x10)` with `v = (code>>4) - ((code>>7)<<4) - 4`, then `20*log10(scale)`
 - Matroska JSON parity: TrackUID -> `UniqueID`, TrackOffset -> `Delay`/`Video_Delay` (Container); video Duration uses frameCount*DefaultDuration with 9-decimal JSON
+- Matroska JSON: video Duration from stats uses framecount/fps with ratio token; ceil to ms; overrides segment Duration
+- Matroska: Maximum bit rate text uses Mb/s; JSON `BitRate_Maximum` uses raw BitRate element
+- Matroska: Menu chapters now emitted in text fields + JSON extra; chapter time uses raw ns (no TimecodeScale)
+- Matroska: General `Overall bit rate mode` now derived from video Bit rate mode
+- Matroska Text: sub bitrate floors b/s under 1 kb/s for CLI parity
 - Matroska JSON adds `colour_*` fields when Color range present; `ErrorDetectionType` lives under `extra`
 - JSON Rotation should be injected for MP4 video only; AAC `FrameCount` only for `mp4a*` codec IDs
 - MPEG-TS JSON parity: StreamOrder `0-0`/`0-1`, IDs/MenuID decimal-only; Duration/Delay 9-decimal JSON; precision min/max = overall/9600

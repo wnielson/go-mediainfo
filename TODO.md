@@ -21,6 +21,7 @@
 - Behavior: IFO inside VIDEO_TS yields VOB-derived stream details but loses audio language; same IFO copied elsewhere shows language like 23.06
 - Behavior: BUP files now present the old IFO-style info (languages) in 23.07+
 - Issue status: reported as still present in all versions from 23.07+
+- Issue 760 details (gh): 23.07 IFO output mirrors VOB (durations/bitrate, Source VOB) and loses Language fields; 23.06 IFO output shows Language for audio/text and shorter IFO-only durations
 - Next step: reproduce with IFO/BUP/VOB samples + dev snapshot; document delta vs 23.06 and isolate path-based behavior
 - Reproduce with IFO+VOB sample set; compare language/runtime fields and menu/chapter listings across versions
 - Repro (Ask.Me.to.Dance.2022 DVD): `VIDEO_TS/VTS_02_0.IFO` inside VIDEO_TS lacks Language; copy outside VIDEO_TS shows Language=English; `VTS_02_0.BUP` shows Language even inside VIDEO_TS
