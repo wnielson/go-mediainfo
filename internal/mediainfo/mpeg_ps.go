@@ -214,6 +214,14 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 		}
 	}
 
+	return finalizeMPEGPS(streams, streamOrder, videoParsers, videoPTS, anyPTS, size, mpegPSOptions{})
+}
+
+type mpegPSOptions struct {
+	dvdExtras bool
+}
+
+func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoParsers map[uint16]*mpeg2VideoParser, videoPTS ptsTracker, anyPTS ptsTracker, size int64, opts mpegPSOptions) (ContainerInfo, []Stream, bool) {
 	var streamsOut []Stream
 	sort.Slice(streamOrder, func(i, j int) bool { return streamOrder[i] < streamOrder[j] })
 	var videoFrameRate float64
@@ -678,9 +686,15 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				}
 				if st.ac3Info.hasDialnorm {
 					extraFields = append(extraFields, jsonKV{Key: "dialnorm", Val: fmt.Sprintf("%d", st.ac3Info.dialnorm)})
+					if opts.dvdExtras {
+						extraFields = append(extraFields, jsonKV{Key: "dialnorm_String", Val: fmt.Sprintf("%d dB", st.ac3Info.dialnorm)})
+					}
 				}
 				if st.ac3Info.hasCompr {
 					extraFields = append(extraFields, jsonKV{Key: "compr", Val: fmt.Sprintf("%.2f", st.ac3Info.comprDB)})
+					if opts.dvdExtras {
+						extraFields = append(extraFields, jsonKV{Key: "compr_String", Val: fmt.Sprintf("%.2f dB", st.ac3Info.comprDB)})
+					}
 				}
 				if st.ac3Info.acmod > 0 {
 					extraFields = append(extraFields, jsonKV{Key: "acmod", Val: fmt.Sprintf("%d", st.ac3Info.acmod)})
@@ -690,9 +704,16 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				}
 				if st.ac3Info.hasCmixlev {
 					extraFields = append(extraFields, jsonKV{Key: "cmixlev", Val: fmt.Sprintf("%.1f", st.ac3Info.cmixlevDB)})
+					if opts.dvdExtras {
+						extraFields = append(extraFields, jsonKV{Key: "cmixlev_String", Val: fmt.Sprintf("%.1f dB", st.ac3Info.cmixlevDB)})
+					}
 				}
 				if st.ac3Info.hasSurmixlev {
-					extraFields = append(extraFields, jsonKV{Key: "surmixlev", Val: fmt.Sprintf("%.0f dB", st.ac3Info.surmixlevDB)})
+					surmix := fmt.Sprintf("%.0f dB", st.ac3Info.surmixlevDB)
+					extraFields = append(extraFields, jsonKV{Key: "surmixlev", Val: surmix})
+					if opts.dvdExtras {
+						extraFields = append(extraFields, jsonKV{Key: "surmixlev_String", Val: surmix})
+					}
 				}
 				if st.ac3Info.hasMixlevel {
 					extraFields = append(extraFields, jsonKV{Key: "mixlevel", Val: fmt.Sprintf("%d", st.ac3Info.mixlevel)})
@@ -703,8 +724,16 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 				if avg, min, max, ok := st.ac3Info.dialnormStats(); ok {
 					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Average", Val: fmt.Sprintf("%d", avg)})
 					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Minimum", Val: fmt.Sprintf("%d", min)})
-					if max != min {
+					if max != min || opts.dvdExtras {
 						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Maximum", Val: fmt.Sprintf("%d", max)})
+					}
+					if opts.dvdExtras {
+						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Average_String", Val: fmt.Sprintf("%d dB", avg)})
+						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Minimum_String", Val: fmt.Sprintf("%d dB", min)})
+						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Maximum_String", Val: fmt.Sprintf("%d dB", max)})
+						if st.ac3Info.dialnormCount > 0 {
+							extraFields = append(extraFields, jsonKV{Key: "dialnorm_Count", Val: fmt.Sprintf("%d", st.ac3Info.dialnormCount)})
+						}
 					}
 				}
 				if avg, min, max, count, ok := st.ac3Info.comprStats(); ok {
@@ -712,6 +741,11 @@ func ParseMPEGPS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool)
 					extraFields = append(extraFields, jsonKV{Key: "compr_Minimum", Val: fmt.Sprintf("%.2f", min)})
 					extraFields = append(extraFields, jsonKV{Key: "compr_Maximum", Val: fmt.Sprintf("%.2f", max)})
 					extraFields = append(extraFields, jsonKV{Key: "compr_Count", Val: fmt.Sprintf("%d", count)})
+					if opts.dvdExtras {
+						extraFields = append(extraFields, jsonKV{Key: "compr_Average_String", Val: fmt.Sprintf("%.2f dB", avg)})
+						extraFields = append(extraFields, jsonKV{Key: "compr_Minimum_String", Val: fmt.Sprintf("%.2f dB", min)})
+						extraFields = append(extraFields, jsonKV{Key: "compr_Maximum_String", Val: fmt.Sprintf("%.2f dB", max)})
+					}
 				}
 				if avg, min, max, count, ok := st.ac3Info.dynrngStats(); ok {
 					extraFields = append(extraFields, jsonKV{Key: "dynrng_Average", Val: fmt.Sprintf("%.2f", avg)})
