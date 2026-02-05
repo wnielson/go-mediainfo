@@ -351,11 +351,11 @@ func (p *psStreamParser) ensureStream(streamID byte, subID byte, kind StreamKind
 	entry := p.streams[key]
 	if entry == nil {
 		entry = &psStream{
-			id:               streamID,
-			subID:            subID,
-			kind:             kind,
-			format:           format,
-			firstPacketOrder: -1,
+			id:                streamID,
+			subID:             subID,
+			kind:              kind,
+			format:            format,
+			firstPacketOrder:  -1,
 			videoLastStartPos: -1,
 		}
 		entry.ccOdd.firstFrame = -1

@@ -43,36 +43,36 @@ type mpeg2VideoInfo struct {
 }
 
 type mpeg2VideoParser struct {
-	carry           []byte
-	info            mpeg2VideoInfo
-	currentGOPCount int
-	sawGOP          bool
-	gopLength       int
-	gopVariable     bool
-	gopM            int
-	gopN            int
-	gopMVariable    bool
-	gopNVariable    bool
-	gopMCounts      map[int]int
-	gopNCounts      map[int]int
-	framesSinceI    int
+	carry             []byte
+	info              mpeg2VideoInfo
+	currentGOPCount   int
+	sawGOP            bool
+	gopLength         int
+	gopVariable       bool
+	gopM              int
+	gopN              int
+	gopMVariable      bool
+	gopNVariable      bool
+	gopMCounts        map[int]int
+	gopNCounts        map[int]int
+	framesSinceI      int
 	framesSinceAnchor int
-	lastISeen       bool
-	lastAnchorSeen  bool
-	iFrameCount     int
-	pFrameCount     int
-	maxBitRateKbps  int64
-	maxBitRateSet   bool
-	maxBitRateMixed bool
-	firstGOPClosed  *bool
-	anyOpenGOP      bool
-	gotSeqExt       bool
-	sawSequence     bool
-	progressiveSeq  bool
-	pictureCount    int
+	lastISeen         bool
+	lastAnchorSeen    bool
+	iFrameCount       int
+	pFrameCount       int
+	maxBitRateKbps    int64
+	maxBitRateSet     bool
+	maxBitRateMixed   bool
+	firstGOPClosed    *bool
+	anyOpenGOP        bool
+	gotSeqExt         bool
+	sawSequence       bool
+	progressiveSeq    bool
+	pictureCount      int
 	progressiveFrames int
-	repeatFirstField int
-	topFieldFirst    int
+	repeatFirstField  int
+	topFieldFirst     int
 }
 
 func (p *mpeg2VideoParser) consume(data []byte) {

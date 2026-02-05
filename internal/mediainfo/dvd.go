@@ -61,11 +61,11 @@ type dvdSubpicAttrs struct {
 }
 
 type dvdMenuLists struct {
-	audio       string
-	sub43       string
-	subWide     string
-	subLetter   string
-	subPanScan  string
+	audio      string
+	sub43      string
+	subWide    string
+	subLetter  string
+	subPanScan string
 }
 
 func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) (dvdInfo, bool) {

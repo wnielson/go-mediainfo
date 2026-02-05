@@ -252,10 +252,10 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 		}
 		if len(chapters) > 0 {
 			menu := Stream{
-				Kind:               StreamMenu,
-				JSONRaw:            map[string]string{},
+				Kind:                StreamMenu,
+				JSONRaw:             map[string]string{},
 				JSONSkipStreamOrder: true,
-				JSONSkipComputed:   true,
+				JSONSkipComputed:    true,
 			}
 			for i, chapter := range chapters {
 				name := chapter.name
