@@ -3,6 +3,7 @@
 ## Parity (1:1 MediaInfo CLI)
 - Goal: 1:1 MediaInfo CLI parity (fields + values + ordering) across text/JSON/XML/CSV
 - Expand format coverage + field parity across CLI outputs
+- Audit `samples/` provenance + licensing; replace/regen if unclear (see `samples/README.md`)
 - Sample parity complete: MP4/MKV/TS/AVI/MPEG Video (MPG) (text output)
 - Next targets: sample sweep (PS/TS edge cases), parity audit for JSON/XML/CSV
 - Remaining diffs: broader sample sweep for edge cases
