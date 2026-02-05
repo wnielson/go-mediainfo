@@ -77,11 +77,16 @@ func (s *matroskaTrackStats) addBlock(timeNs int64, dataBytes int64, durationNs 
 
 type ebmlReader struct {
 	r   *bufio.Reader
+	rs  io.ReadSeeker
 	pos int64
+	tmp []byte
 }
 
-func newEBMLReader(r io.Reader) *ebmlReader {
-	return &ebmlReader{r: bufio.NewReaderSize(r, 1024*1024)}
+func newEBMLReader(rs io.ReadSeeker) *ebmlReader {
+	return &ebmlReader{
+		rs: rs,
+		r:  bufio.NewReaderSize(rs, 1024*1024),
+	}
 }
 
 func (er *ebmlReader) readByte() (byte, error) {
@@ -97,7 +102,16 @@ func (er *ebmlReader) readN(n int64) ([]byte, error) {
 	if n <= 0 {
 		return nil, nil
 	}
-	buf := make([]byte, n)
+	var buf []byte
+	if n <= 4096 {
+		need := int(n)
+		if cap(er.tmp) < need {
+			er.tmp = make([]byte, need)
+		}
+		buf = er.tmp[:need]
+	} else {
+		buf = make([]byte, n)
+	}
 	if _, err := io.ReadFull(er.r, buf); err != nil {
 		return nil, err
 	}
@@ -108,6 +122,13 @@ func (er *ebmlReader) readN(n int64) ([]byte, error) {
 func (er *ebmlReader) skip(n int64) error {
 	if n <= 0 {
 		return nil
+	}
+	if n >= 64*1024 && er.rs != nil {
+		if _, err := er.rs.Seek(er.pos+n, io.SeekStart); err == nil {
+			er.pos += n
+			er.r.Reset(er.rs)
+			return nil
+		}
 	}
 	for n > 0 {
 		chunk := n
