@@ -8,6 +8,7 @@ import (
 )
 
 const aviMaxVisualScan = 1 << 20
+const aviMaxVOPScan = 32 << 20
 
 type aviMainHeader struct {
 	microSecPerFrame uint32
@@ -403,6 +404,7 @@ func parseAVIINFO(data []byte) string {
 func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, videoData *[]byte, vopScan *vopScanner) {
 	const aviScanChunk = 256 << 10
 	scanBuf := make([]byte, aviScanChunk)
+	vopScanned := 0
 	offset := start
 	for offset+8 <= end {
 		var header [8]byte
@@ -422,7 +424,7 @@ func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, vi
 					stream := streams[index]
 					stream.bytes += uint64(chunkSize)
 					if stream.kind == StreamVideo && chunkSize > 0 {
-						needVOP := vopScan != nil && vopScan.bvop == nil
+						needVOP := vopScan != nil && vopScan.bvop == nil && vopScanned < aviMaxVOPScan
 						needVisual := videoData != nil && len(*videoData) < aviMaxVisualScan
 						if needVOP || needVisual {
 							remainingVisual := 0
@@ -441,8 +443,18 @@ func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, vi
 									break
 								}
 								if needVOP {
-									vopScan.feed(buf)
+									feedLen := len(buf)
+									remaining := aviMaxVOPScan - vopScanned
+									if feedLen > remaining {
+										feedLen = remaining
+									}
+									if feedLen > 0 {
+										vopScan.feed(buf[:feedLen])
+										vopScanned += feedLen
+									}
 									if vopScan.bvop != nil {
+										needVOP = false
+									} else if vopScanned >= aviMaxVOPScan {
 										needVOP = false
 									}
 								}
