@@ -17,6 +17,10 @@ const (
 	mkvIDSegment           = 0x18538067
 	mkvIDInfo              = 0x1549A966
 	mkvIDCluster           = 0x1F43B675
+	mkvIDSeekHead          = 0x114D9B74
+	mkvIDSeek              = 0x4DBB
+	mkvIDSeekID            = 0x53AB
+	mkvIDSeekPosition      = 0x53AC
 	mkvIDSegmentUID        = 0x73A4
 	mkvIDTimecodeScale     = 0x2AD7B1
 	mkvIDDuration          = 0x4489
@@ -152,8 +156,26 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 		if len(info.tagStats) == 0 && size > scanSize {
 			writingApp := findField(info.General, "Writing application")
 			muxingApp := findField(info.General, "Writing library")
+			if seekPos, ok := findMatroskaSeekPosition(buf, int(info.SegmentOffset), mkvIDTags); ok {
+				tagsOffset := info.SegmentOffset + int64(seekPos)
+				if tagsOffset > 0 && tagsOffset < size {
+					tagsSize := min(size-tagsOffset, int64(1<<20))
+					if tagsSize > 0 {
+						tagsBuf := make([]byte, tagsSize)
+						if _, err := r.ReadAt(tagsBuf, tagsOffset); err == nil || err == io.EOF {
+							encoders, stats := parseMatroskaTagsFromBuffer(tagsBuf, writingApp, muxingApp)
+							if len(stats) > 0 {
+								info.tagStats = stats
+							}
+							if len(encoders) > 0 && len(info.Tracks) > 0 {
+								applyMatroskaEncoders(info.Tracks, encoders)
+							}
+						}
+					}
+				}
+			}
 			tailSize := min(size, int64(8<<20))
-			if tailSize > 0 {
+			if len(info.tagStats) == 0 && tailSize > 0 {
 				tailBuf := make([]byte, tailSize)
 				if _, err := r.ReadAt(tailBuf, size-tailSize); err == nil || err == io.EOF {
 					encoders, stats := parseMatroskaTagsFromBuffer(tailBuf, writingApp, muxingApp)
@@ -223,6 +245,98 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 		}
 	}
 	return info, true
+}
+
+func findMatroskaSeekPosition(buf []byte, segmentOffset int, targetID uint64) (uint64, bool) {
+	if segmentOffset <= 0 || segmentOffset >= len(buf) {
+		return 0, false
+	}
+	pos := segmentOffset
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		if id == mkvIDSeekHead {
+			if seekPos, ok := parseMatroskaSeekHead(buf[dataStart:dataEnd], targetID); ok {
+				return seekPos, true
+			}
+		}
+		pos = dataEnd
+	}
+	return 0, false
+}
+
+func parseMatroskaSeekHead(buf []byte, targetID uint64) (uint64, bool) {
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		if id == mkvIDSeek {
+			if seekID, seekPos, ok := parseMatroskaSeekEntry(buf[dataStart:dataEnd]); ok && seekID == targetID {
+				return seekPos, true
+			}
+		}
+		pos = dataEnd
+	}
+	return 0, false
+}
+
+func parseMatroskaSeekEntry(buf []byte) (uint64, uint64, bool) {
+	var seekID uint64
+	var seekPos uint64
+	var hasID bool
+	var hasPos bool
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		switch id {
+		case mkvIDSeekID:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				seekID = value
+				hasID = true
+			}
+		case mkvIDSeekPosition:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				seekPos = value
+				hasPos = true
+			}
+		}
+		pos = dataEnd
+	}
+	return seekID, seekPos, hasID && hasPos
 }
 
 func parseMatroska(buf []byte) (MatroskaInfo, bool) {
