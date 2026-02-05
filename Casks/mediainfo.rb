@@ -9,10 +9,13 @@ cask "mediainfo" do
     skip "Auto-generated on release."
   end
 
-  conflicts_with formula: "media-info"
-  conflicts_with formula: "mediainfo"
-
   binary "mediainfo"
+  binary "mediainfo", target: "go-mediainfo"
+
+  caveats <<~EOS
+    If you already have Homebrew's MediaInfo installed, the `mediainfo` symlink may already exist.
+    Use `go-mediainfo` to run this cask's binary.
+  EOS
 
   on_macos do
     on_intel do

@@ -81,8 +81,11 @@ homebrew_casks:
     homepage: "https://github.com/autobrr/go-mediainfo"
     description: "Go rewrite of MediaInfo CLI."
     custom_block: |
-      conflicts_with formula: "media-info"
-      conflicts_with formula: "mediainfo"
+      binary "mediainfo", target: "go-mediainfo"
+      caveats <<~EOS
+        If you already have Homebrew's MediaInfo installed, the `mediainfo` symlink may already exist.
+        Use `go-mediainfo` to run this cask's binary.
+      EOS
     repository:
       owner: autobrr
       name: "go-mediainfo"
