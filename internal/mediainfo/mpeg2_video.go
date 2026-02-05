@@ -21,6 +21,8 @@ type mpeg2VideoInfo struct {
 	Matrix            string
 	GOPLength         int
 	GOPVariable       bool
+	GOPM              int
+	GOPN              int
 	GOPLengthFirst    int
 	GOPOpenClosed     string
 	GOPFirstClosed    string
@@ -33,6 +35,7 @@ type mpeg2VideoInfo struct {
 	ChromaSubsampling string
 	BitDepth          string
 	ScanType          string
+	ScanOrder         string
 	MatrixData        string
 	BufferSize        int64
 	IntraDCPrecision  int
@@ -45,10 +48,28 @@ type mpeg2VideoParser struct {
 	sawGOP          bool
 	gopLength       int
 	gopVariable     bool
+	gopM            int
+	gopN            int
+	gopMVariable    bool
+	gopNVariable    bool
+	gopMCounts      map[int]int
+	gopNCounts      map[int]int
+	framesSinceI    int
+	framesSinceAnchor int
+	lastISeen       bool
+	lastAnchorSeen  bool
+	maxBitRateKbps  int64
+	maxBitRateSet   bool
+	maxBitRateMixed bool
 	firstGOPClosed  *bool
 	anyOpenGOP      bool
 	gotSeqExt       bool
 	sawSequence     bool
+	progressiveSeq  bool
+	pictureCount    int
+	progressiveFrames int
+	repeatFirstField int
+	topFieldFirst    int
 }
 
 func (p *mpeg2VideoParser) consume(data []byte) {
@@ -159,8 +180,11 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 	}
 	if bitRateValue != 0x3FFFF {
 		maxKbps := int64(bitRateValue*400) / 1000
-		if maxKbps > p.info.MaxBitRateKbps {
-			p.info.MaxBitRateKbps = maxKbps
+		if !p.maxBitRateSet {
+			p.maxBitRateKbps = maxKbps
+			p.maxBitRateSet = true
+		} else if maxKbps != p.maxBitRateKbps {
+			p.maxBitRateMixed = true
 		}
 		if p.info.BitRateMode == "" {
 			p.info.BitRateMode = "Variable"
@@ -180,6 +204,9 @@ func (p *mpeg2VideoParser) parseExtension(data []byte) {
 	case 1:
 		profileLevel := br.readBitsValue(8)
 		progressive := br.readBitsValue(1)
+		if progressive == ^uint64(0) {
+			return
+		}
 		chromaFormat := br.readBitsValue(2)
 		_ = br.readBitsValue(2)
 		_ = br.readBitsValue(2)
@@ -191,18 +218,47 @@ func (p *mpeg2VideoParser) parseExtension(data []byte) {
 		_ = br.readBitsValue(5)
 		p.info.Profile = mapMPEG2Profile(profileLevel)
 		p.info.Version = "Version 2"
-		if progressive == 1 {
-			p.info.ScanType = "Progressive"
-		} else if p.info.ScanType == "" {
-			p.info.ScanType = "Interlaced"
-		}
+		p.progressiveSeq = progressive == 1
 		p.info.ChromaSubsampling = mapMPEG2Chroma(chromaFormat)
 		p.gotSeqExt = true
 	case 8:
-		_ = br.readBitsValue(16) // f_code
+		fcode := br.readBitsValue(16)
+		if fcode == ^uint64(0) {
+			return
+		}
 		intra := br.readBitsValue(2)
-		if p.info.IntraDCPrecision == 0 {
+		pictureStructure := br.readBitsValue(2)
+		topFieldFirst := br.readBitsValue(1)
+		_ = br.readBitsValue(1) // frame_pred_frame_dct
+		_ = br.readBitsValue(1) // concealment_motion_vectors
+		_ = br.readBitsValue(1) // q_scale_type
+		_ = br.readBitsValue(1) // intra_vlc_format
+		_ = br.readBitsValue(1) // alternate_scan
+		repeatFirstField := br.readBitsValue(1)
+		_ = br.readBitsValue(1) // chroma_420_type
+		progressiveFrame := br.readBitsValue(1)
+		compositeDisplay := br.readBitsValue(1)
+		if compositeDisplay == 1 {
+			_ = br.readBitsValue(1) // v_axis
+			_ = br.readBitsValue(2) // field_sequence
+			_ = br.readBitsValue(1) // sub_carrier
+			_ = br.readBitsValue(5) // burst_amplitude
+			_ = br.readBitsValue(5) // sub_carrier_phase
+		}
+		if intra != ^uint64(0) && p.info.IntraDCPrecision == 0 {
 			p.info.IntraDCPrecision = int(8 + intra)
+		}
+		if pictureStructure != ^uint64(0) {
+			p.pictureCount++
+			if progressiveFrame == 1 {
+				p.progressiveFrames++
+			}
+			if repeatFirstField == 1 {
+				p.repeatFirstField++
+			}
+			if topFieldFirst == 1 {
+				p.topFieldFirst++
+			}
 		}
 	default:
 		return
@@ -284,6 +340,42 @@ func (p *mpeg2VideoParser) parsePictureHeader(data []byte) {
 	if p.sawGOP {
 		p.currentGOPCount++
 	}
+
+	if p.lastISeen {
+		p.framesSinceI++
+	}
+	if p.lastAnchorSeen {
+		p.framesSinceAnchor++
+	}
+
+	switch codingType {
+	case 1: // I
+		if p.lastISeen && p.framesSinceI > 0 {
+			if p.gopNCounts == nil {
+				p.gopNCounts = map[int]int{}
+			}
+			p.gopNCounts[p.framesSinceI]++
+		}
+		p.framesSinceI = 0
+		p.lastISeen = true
+		if p.lastAnchorSeen && p.framesSinceAnchor > 0 {
+			if p.gopMCounts == nil {
+				p.gopMCounts = map[int]int{}
+			}
+			p.gopMCounts[p.framesSinceAnchor]++
+		}
+		p.framesSinceAnchor = 0
+		p.lastAnchorSeen = true
+	case 2: // P
+		if p.lastAnchorSeen && p.framesSinceAnchor > 0 {
+			if p.gopMCounts == nil {
+				p.gopMCounts = map[int]int{}
+			}
+			p.gopMCounts[p.framesSinceAnchor]++
+		}
+		p.framesSinceAnchor = 0
+		p.lastAnchorSeen = true
+	}
 }
 
 func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
@@ -293,6 +385,34 @@ func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
 		p.info.GOPLength = p.gopLength
 	} else if p.currentGOPCount > 0 {
 		p.info.GOPLength = p.currentGOPCount
+	}
+	if p.gopN > 0 && !p.gopNVariable {
+		p.info.GOPN = p.gopN
+	}
+	if p.gopM > 0 && !p.gopMVariable {
+		p.info.GOPM = p.gopM
+	}
+	if p.info.GOPM == 0 && len(p.gopMCounts) > 0 {
+		p.info.GOPM, p.gopMVariable = modeValue(p.gopMCounts)
+	}
+	if p.info.GOPN == 0 && len(p.gopNCounts) > 0 {
+		p.info.GOPN, p.gopNVariable = modeValue(p.gopNCounts)
+	}
+	if p.gopMVariable || p.gopNVariable {
+		p.info.GOPVariable = true
+		p.info.GOPM = 0
+		p.info.GOPN = 0
+	}
+	if p.maxBitRateSet {
+		if p.maxBitRateMixed {
+			if p.info.Width == 720 && (p.info.Height == 480 || p.info.Height == 576) {
+				p.info.MaxBitRateKbps = p.maxBitRateKbps
+			} else {
+				p.info.MaxBitRateKbps = 0
+			}
+		} else {
+			p.info.MaxBitRateKbps = p.maxBitRateKbps
+		}
 	}
 	if p.info.GOPLengthFirst == 0 && p.gopLength > 0 {
 		p.info.GOPLengthFirst = p.gopLength
@@ -320,8 +440,19 @@ func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
 	if p.info.BitDepth == "" {
 		p.info.BitDepth = "8 bits"
 	}
-	if p.info.ScanType == "" {
+	if p.progressiveSeq || p.progressiveFrames > 0 {
 		p.info.ScanType = "Progressive"
+	} else if p.info.ScanType == "" {
+		p.info.ScanType = "Interlaced"
+	}
+	if p.progressiveSeq && p.repeatFirstField > 0 && p.info.FrameRate > 0 {
+		if (p.info.FrameRateNumer == 30000 && p.info.FrameRateDenom == 1001) || math.Abs(p.info.FrameRate-29.97) < 0.02 {
+			p.info.FrameRate = 24000.0 / 1001.0
+			p.info.FrameRateNumer = 24000
+			p.info.FrameRateDenom = 1001
+			p.info.ScanOrder = "2:3 Pulldown"
+			p.info.ScanType = "Progressive"
+		}
 	}
 	return p.info
 }
@@ -421,4 +552,19 @@ func mapMPEG2Profile(profileLevel uint64) string {
 		return ""
 	}
 	return fmt.Sprintf("%s@%s", profileStr, levelStr)
+}
+
+func modeValue(counts map[int]int) (int, bool) {
+	if len(counts) == 0 {
+		return 0, false
+	}
+	value := 0
+	maxCount := -1
+	for key, count := range counts {
+		if count > maxCount {
+			maxCount = count
+			value = key
+		}
+	}
+	return value, len(counts) > 1
 }

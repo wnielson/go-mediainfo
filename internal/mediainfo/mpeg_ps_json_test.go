@@ -44,7 +44,7 @@ func TestMpegPsGOPHeaderJSONBitRate(t *testing.T) {
 	if bitrate == "" {
 		t.Fatalf("missing video bitrate")
 	}
-	if bitrate != "37979662" {
+	if bitrate != "51402" {
 		t.Fatalf("unexpected video bitrate: %s", bitrate)
 	}
 }

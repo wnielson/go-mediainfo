@@ -115,6 +115,7 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 	}
 
 	var durationSeconds float64
+	var ifoDurationSeconds float64
 	var chapterStarts []int64
 	var menuStream *Stream
 	var audioAttrs []dvdAudioAttrs
@@ -127,6 +128,7 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 		}
 		if durationSeconds > 0 {
 			info.Container.DurationSeconds = durationSeconds
+			ifoDurationSeconds = durationSeconds
 			generalFields = append(generalFields, Field{Name: "Duration", Value: formatDVDDuration(durationSeconds)})
 		}
 		audioAttrs = parseDVDAudioAttrs(data, dvdAudioCountVTSOffset, dvdAudioAttrVTSOffset)
@@ -147,9 +149,10 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 			if parsedInfo, parsedStreams, ok := ParseMPEGPSFiles(vobPaths, info.FileSize, mpegPSOptions{dvdExtras: true, parseSpeed: opts.ParseSpeed}); ok {
 				streams = mergeDVDTitleSetStreams(parsedStreams, dvdTitleSetSource(base))
 				titleSetParsed = len(streams) > 0
-				if parsedInfo.DurationSeconds > 0 && durationSeconds == 0 {
+				if parsedInfo.DurationSeconds > 0 {
 					info.Container.DurationSeconds = parsedInfo.DurationSeconds
 					durationSeconds = parsedInfo.DurationSeconds
+					generalFields = setFieldValue(generalFields, "Duration", formatDuration(durationSeconds))
 				}
 				if info.GeneralJSON == nil {
 					info.GeneralJSON = map[string]string{}
@@ -338,8 +341,8 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 		}
 	}
 
-	if len(chapterStarts) > 0 && durationSeconds > 0 {
-		menuFields := []Field{{Name: "Duration", Value: formatDVDDuration(durationSeconds)}}
+	if len(chapterStarts) > 0 && ifoDurationSeconds > 0 {
+		menuFields := []Field{{Name: "Duration", Value: formatDVDDuration(ifoDurationSeconds)}}
 		for i, startMs := range chapterStarts {
 			menuFields = append(menuFields, Field{Name: formatDVDChapterTimeMs(startMs), Value: fmt.Sprintf("Chapter %d", i+1)})
 		}
@@ -358,12 +361,12 @@ func ParseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 			}
 		}
 		menu := Stream{Kind: StreamMenu, Fields: menuFields, JSON: map[string]string{}, JSONRaw: map[string]string{}, JSONSkipStreamOrder: true, JSONSkipComputed: true}
-		menu.JSON["Duration"] = formatJSONSeconds(durationSeconds)
+		menu.JSON["Duration"] = formatJSONSeconds(ifoDurationSeconds)
 		menu.JSON["Delay"] = "0.000"
 		menu.JSON["FrameRate"] = "30.000"
 		menu.JSON["FrameRate_Num"] = "30"
 		menu.JSON["FrameRate_Den"] = "1"
-		menu.JSON["FrameCount"] = strconv.FormatInt(int64(durationSeconds*30+0.5), 10)
+		menu.JSON["FrameCount"] = strconv.FormatInt(int64(ifoDurationSeconds*30+0.5), 10)
 		menu.JSONRaw["extra"] = renderDVDMenuExtra(chapterStarts, dvdMenuListsFromCounts(len(audioAttrs), len(subpicAttrs)))
 		menuStream = &menu
 	}

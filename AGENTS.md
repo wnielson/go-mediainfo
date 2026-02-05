@@ -144,6 +144,12 @@ Owner: soup
 - MPEG-PS: PTS tracker stores first PTS; text (RLE) Delay/Duration use first->last PTS span + MuxingMode=DVD-Video + Video_Delay
 - MPEG-PS: video duration uses zero-segment half-frame seed; bitrate uses framecount/fps on reset streams and +1 frame when no resets
 - MPEG-PS: JSON stream size uses full bytes (no padding subtraction); GOP-only bitrate mode = Constant
+- MPEG-PS: single-file path now honors ParseSpeed sampling (first/middle/last)
+- MPEG-PS header-only video (1-2 frames): use frameCount/frameRate duration, avoid syncing to audio PTS, stream size from header bytes (matches MediaInfo tiny StreamSize/BitRate for menu VOBs)
+- DVD aggregate: title-set streams use VOB-derived duration; menu uses IFO-derived duration (formatDVDDuration)
+- AC-3 text (dvdExtras): include bsid/dsurmod/acmod/lfeon; dynrng only when dynrnge present; surmixlev shows dB line only
+- MPEG-PS text (RLE): add Format/Info + Delay relative to video
+- MPEG-2 video: Time code emitted even when GOP variable; Max bit rate kept for DVD sizes even if mixed
 - AVI JSON: StreamSize uses raw bytes; BitRate uses stream rate/scale duration (not kb/s-rounded); General JSON carries OverallBitRate/FrameCount/StreamSize
 - MPEG Video JSON: no StreamOrder; BitRate uses JSON-rounded Duration; Delay_Settings from GOP header; BufferSize + intra_dc_precision in `extra`
 - JSON field order: Delay_Settings between Delay and Delay_DropFrame; Format_Settings only for General

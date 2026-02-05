@@ -19,6 +19,7 @@ type psStream struct {
 	ac3Info           ac3Info
 	hasAC3            bool
 	videoHeaderBytes  uint64
+	videoSeqExtBytes  uint64
 	videoHeaderCarry  []byte
 	videoStartZeroRun int
 	videoExtraZeros   uint64
@@ -41,6 +42,7 @@ type psStream struct {
 	ccOdd             ccTrack
 	ccEven            ccTrack
 	firstPacketOrder  int
+	packetCount       int
 }
 
 type ccTrack struct {

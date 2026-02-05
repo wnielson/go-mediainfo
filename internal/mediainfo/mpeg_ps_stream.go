@@ -376,15 +376,21 @@ func (p *psStreamParser) consumePayload(entry *psStream, key uint16, flags byte,
 	if entry.kind == StreamVideo {
 		consumeMPEG2Captions(entry, payload, pts, hasPTS)
 		consumeMPEG2StartCodeStats(entry, payload, (flags&0x80) != 0)
-		consumeH264PS(entry, payload)
-		if !entry.videoIsH264 {
-			parser := p.videoParsers[key]
-			if parser == nil {
-				parser = &mpeg2VideoParser{}
-				p.videoParsers[key] = parser
-			}
-			parser.consume(payload)
-			consumeMPEG2HeaderBytes(entry, payload)
+		parser := p.videoParsers[key]
+		if parser == nil {
+			parser = &mpeg2VideoParser{}
+			p.videoParsers[key] = parser
+		}
+		parser.consume(payload)
+		if parser.sawSequence {
+			entry.videoIsMPEG2 = true
+			entry.videoIsH264 = false
+			entry.format = "MPEG Video"
+		}
+		if entry.videoIsMPEG2 {
+			consumeMPEG2HeaderBytes(entry, payload, hasPTS)
+		} else {
+			consumeH264PS(entry, payload)
 		}
 	}
 	if entry.kind == StreamAudio {

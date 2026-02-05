@@ -36,6 +36,8 @@ type ac3Info struct {
 	comprIsDB     bool
 	comprFieldDB  float64
 	hasComprField bool
+	dynrngDB      float64
+	hasDynrng     bool
 	dynrngCount   int
 	dynrngSum     float64
 	dynrngMin     float64
@@ -250,6 +252,8 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 			info.dynrngeSeen = true
 			if code != 0xFF {
 				value := ac3DynrngDB(code)
+				info.dynrngDB = value
+				info.hasDynrng = true
 				info.dynrngSum = math.Pow(10.0, value/10.0)
 				info.dynrngCount = 1
 				info.dynrngMin = value
@@ -302,6 +306,8 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		comprFieldDB:  info.comprFieldDB,
 		hasCompr:      info.hasCompr,
 		hasComprField: info.hasComprField,
+		dynrngDB:      info.dynrngDB,
+		hasDynrng:     info.hasDynrng,
 		dynrngSum:     info.dynrngSum,
 		dynrngCount:   info.dynrngCount,
 		dynrngMin:     info.dynrngMin,
@@ -428,6 +434,8 @@ func parseEAC3Frame(payload []byte) (ac3Info, int, bool) {
 		comprSum:      info.comprSum,
 		comprMin:      info.comprMin,
 		comprMax:      info.comprMax,
+		dynrngDB:      info.dynrngDB,
+		hasDynrng:     info.hasDynrng,
 		hasCompr:      info.hasCompr,
 	}
 	return info, frameSize, true
@@ -550,6 +558,10 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 	if frame.hasRoomtyp && !info.hasRoomtyp {
 		info.roomtyp = frame.roomtyp
 		info.hasRoomtyp = true
+	}
+	if frame.hasDynrng && !info.hasDynrng {
+		info.dynrngDB = frame.dynrngDB
+		info.hasDynrng = true
 	}
 	if frame.dynrngeSeen {
 		info.dynrngeSeen = true

@@ -1,6 +1,6 @@
 package mediainfo
 
-func consumeMPEG2HeaderBytes(entry *psStream, payload []byte) {
+func consumeMPEG2HeaderBytes(entry *psStream, payload []byte, hasPTS bool) {
 	if entry == nil || len(payload) == 0 {
 		return
 	}
@@ -9,7 +9,26 @@ func consumeMPEG2HeaderBytes(entry *psStream, payload []byte) {
 		if buf[i] != 0x00 || buf[i+1] != 0x00 || buf[i+2] != 0x01 {
 			continue
 		}
-		entry.videoHeaderBytes += mpeg2HeaderSize(buf[i+3])
+		switch buf[i+3] {
+		case 0xB3:
+			entry.videoHeaderBytes += 12
+			if hasPTS {
+				entry.videoSeqExtBytes += 12
+			}
+		case 0xB5:
+			entry.videoHeaderBytes += 4
+			if hasPTS {
+				entry.videoSeqExtBytes += 4
+			}
+		case 0xB8:
+			entry.videoHeaderBytes += 8
+		case 0x00:
+			entry.videoHeaderBytes += 6
+		default:
+			if buf[i+3] >= 0x01 && buf[i+3] <= 0xAF {
+				entry.videoHeaderBytes += 6
+			}
+		}
 	}
 	if len(buf) >= 3 {
 		entry.videoHeaderCarry = append(entry.videoHeaderCarry[:0], buf[len(buf)-3:]...)

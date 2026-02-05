@@ -399,7 +399,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 		}
 	case "MPEG-PS":
-		if parsedInfo, parsedStreams, ok := ParseMPEGPS(file, stat.Size()); ok {
+		if parsedInfo, parsedStreams, ok := ParseMPEGPSWithOptions(file, stat.Size(), mpegPSOptions{parseSpeed: opts.ParseSpeed}); ok {
 			info = parsedInfo
 			streams = parsedStreams
 			general.JSON = map[string]string{}

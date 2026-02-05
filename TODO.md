@@ -15,6 +15,9 @@
 - DVD: verify EIA-608 timing on more samples (Ask.Me.to.Dance IFO matched)
 - DVD: verify CC frames-before-first-event count vs MediaInfo (currently derived from MPEG-2 picture count)
 - DVD: run full directory parity on large DVD sets (long-running scan)
+- DVD VOB/IFO: MPEG-PS video duration/bitrate/stream size still mismatching on VTS_02_1.VOB and VTS_02_0.IFO (upstream video Duration 83 ms, Stream size ~254 KiB, Bit rate 31.2 Mb/s)
+- DVD IFO: menu output should include multiple Menu # entries (per PGC); we currently emit a single Menu
+- DVD IFO: AC-3 dialnorm/compr/dynrng stat counts differ from upstream on VTS_02_0.IFO (likely sample/PTS handling)
 
 ## Post-parity
 - Investigate MediaInfo issue #760: DVD IFO language/runtime regression (23.07 vs 23.06). https://github.com/MediaArea/MediaInfo/issues/760
@@ -23,6 +26,7 @@
 - Behavior: BUP files now present the old IFO-style info (languages) in 23.07+
 - Issue status: reported as still present in all versions from 23.07+
 - Issue 760 details (gh): 23.07 IFO output mirrors VOB (durations/bitrate, Source VOB) and loses Language fields; 23.06 IFO output shows Language for audio/text and shorter IFO-only durations
+- Issue 760 details (gh): 23.07 IFO shows VOB-derived stream details (GOP/settings/stream size) + Source VOB, while 23.06 IFO shows minimal stream info + Language
 - Next step: reproduce with IFO/BUP/VOB samples + dev snapshot; document delta vs 23.06 and isolate path-based behavior
 - Reproduce with IFO+VOB sample set; compare language/runtime fields and menu/chapter listings across versions
 - Repro (Ask.Me.to.Dance.2022 DVD): `VIDEO_TS/VTS_02_0.IFO` inside VIDEO_TS lacks Language; copy outside VIDEO_TS shows Language=English; `VTS_02_0.BUP` shows Language even inside VIDEO_TS
