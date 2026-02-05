@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -919,25 +918,16 @@ func dvdVOBIndex(path string) int {
 
 func dvdJSONStreamStats(streams []Stream) (string, int64) {
 	var frameCount string
-	var streamSizeSum int64
 	for _, stream := range streams {
 		if stream.Kind == StreamVideo {
 			if findField(stream.Fields, "Format") != "" {
-				duration, durOk := parseDurationSeconds(findField(stream.Fields, "Duration"))
-				fps, fpsOk := parseFPS(findField(stream.Fields, "Frame rate"))
-				if durOk && fpsOk {
-					frameCount = strconv.Itoa(int(math.Round(duration * fps)))
-				}
-			}
-		}
-		if stream.JSON != nil {
-			if value, ok := stream.JSON["StreamSize"]; ok {
-				if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
-					streamSizeSum += parsed
+				if count, ok := frameCountFromFields(stream.Fields); ok {
+					frameCount = count
 				}
 			}
 		}
 	}
+	streamSizeSum := sumStreamSizes(streams, false)
 	return frameCount, streamSizeSum
 }
 

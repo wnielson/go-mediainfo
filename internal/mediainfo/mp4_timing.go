@@ -60,23 +60,24 @@ func parseStts(payload []byte) (uint64, uint32, uint32, bool) {
 }
 
 func parseMdhd(payload []byte) (float64, uint32, bool) {
-	if len(payload) < 24 {
+	return parseMP4Duration(payload, 24, 36)
+}
+
+func parseMP4Duration(payload []byte, minV0 int, minV1 int) (float64, uint32, bool) {
+	if len(payload) < minV0 {
 		return 0, 0, false
 	}
 	version := payload[0]
-	if version == 0 {
-		if len(payload) < 24 {
-			return 0, 0, false
-		}
+	switch version {
+	case 0:
 		timescale := binary.BigEndian.Uint32(payload[12:16])
 		duration := binary.BigEndian.Uint32(payload[16:20])
 		if timescale == 0 {
 			return 0, 0, false
 		}
 		return float64(duration) / float64(timescale), timescale, true
-	}
-	if version == 1 {
-		if len(payload) < 36 {
+	case 1:
+		if len(payload) < minV1 {
 			return 0, 0, false
 		}
 		timescale := binary.BigEndian.Uint32(payload[20:24])
@@ -85,6 +86,7 @@ func parseMdhd(payload []byte) (float64, uint32, bool) {
 			return 0, 0, false
 		}
 		return float64(duration) / float64(timescale), timescale, true
+	default:
+		return 0, 0, false
 	}
-	return 0, 0, false
 }

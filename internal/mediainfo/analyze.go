@@ -51,10 +51,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			for _, field := range parsed.General {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
-			if info.DurationSeconds > 0 {
-				overall := (float64(stat.Size()) * 8) / info.DurationSeconds
-				general.JSON["OverallBitRate"] = strconv.FormatInt(int64(math.Round(overall)), 10)
-			}
+			setOverallBitRate(general.JSON, stat.Size(), info.DurationSeconds)
 			if headerSize, dataSize, footerSize, mdatCount, moovBeforeMdat, ok := mp4TopLevelSizes(file, stat.Size()); ok {
 				general.JSON["HeaderSize"] = strconv.FormatInt(headerSize, 10)
 				general.JSON["DataSize"] = strconv.FormatInt(dataSize, 10)
@@ -201,25 +198,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			if generalFrameCount != "" {
 				general.JSON["FrameCount"] = generalFrameCount
 			}
-			if _, err := file.Seek(0, io.SeekStart); err == nil {
-				sniff := make([]byte, 1<<20)
-				n, _ := io.ReadFull(file, sniff)
-				writingLib, encoding := findX264Info(sniff[:n])
-				if writingLib != "" || encoding != "" {
-					for i := range streams {
-						if streams[i].Kind != StreamVideo || findField(streams[i].Fields, "Format") != "AVC" {
-							continue
-						}
-						if writingLib != "" {
-							streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Writing library", Value: writingLib})
-						}
-						if encoding != "" {
-							streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Encoding settings", Value: encoding})
-						}
-						break
-					}
-				}
-			}
+			applyX264Info(file, streams, x264InfoOptions{})
 		}
 	case "Matroska":
 		if parsed, ok := ParseMatroskaWithOptions(file, stat.Size(), opts); ok {
@@ -246,31 +225,10 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			if info.DurationSeconds > 0 {
 				general.JSON["Duration"] = formatJSONFloat(info.DurationSeconds)
 			}
-			if info.DurationSeconds > 0 {
-				overall := (float64(stat.Size()) * 8) / info.DurationSeconds
-				general.JSON["OverallBitRate"] = strconv.FormatInt(int64(math.Round(overall)), 10)
-			}
+			setOverallBitRate(general.JSON, stat.Size(), info.DurationSeconds)
 			general.JSON["IsStreamable"] = "Yes"
-			var streamSizeSum int64
-			for _, stream := range streams {
-				if stream.JSON != nil {
-					if value, ok := stream.JSON["StreamSize"]; ok {
-						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
-							streamSizeSum += parsed
-						}
-					}
-				} else if sizeValue := findField(stream.Fields, "Stream size"); sizeValue != "" {
-					if parsed, ok := parseSizeBytes(sizeValue); ok {
-						streamSizeSum += parsed
-					}
-				}
-			}
-			if streamSizeSum > 0 {
-				remaining := stat.Size() - streamSizeSum
-				if remaining >= 0 {
-					general.JSON["StreamSize"] = strconv.FormatInt(remaining, 10)
-				}
-			}
+			streamSizeSum := sumStreamSizes(streams, true)
+			setRemainingStreamSize(general.JSON, stat.Size(), streamSizeSum)
 			overallModeField := ""
 			for _, stream := range streams {
 				if stream.Kind != StreamVideo {
@@ -313,36 +271,12 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 				}
 				break
 			}
-			if _, err := file.Seek(0, io.SeekStart); err == nil {
-				sniff := make([]byte, 1<<20)
-				n, _ := io.ReadFull(file, sniff)
-				writingLib, encoding := findX264Info(sniff[:n])
-				if writingLib != "" || encoding != "" {
-					for i := range streams {
-						if streams[i].Kind != StreamVideo || findField(streams[i].Fields, "Format") != "AVC" {
-							continue
-						}
-						if writingLib != "" && findField(streams[i].Fields, "Writing library") == "" {
-							streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Writing library", Value: writingLib})
-						}
-						if encoding != "" && findField(streams[i].Fields, "Encoding settings") == "" {
-							streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Encoding settings", Value: encoding})
-						}
-						if encoding != "" && findField(streams[i].Fields, "Nominal bit rate") == "" {
-							if bitrate, ok := findX264Bitrate(encoding); ok {
-								streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Nominal bit rate", Value: formatBitrate(bitrate)})
-								width, _ := parsePixels(findField(streams[i].Fields, "Width"))
-								height, _ := parsePixels(findField(streams[i].Fields, "Height"))
-								fps, _ := parseFPS(findField(streams[i].Fields, "Frame rate"))
-								if bits := formatBitsPerPixelFrame(bitrate, width, height, fps); bits != "" {
-									streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Bits/(Pixel*Frame)", Value: bits})
-								}
-							}
-						}
-						break
-					}
-				}
-			}
+			applyX264Info(file, streams, x264InfoOptions{
+				skipWritingLibIfExists: true,
+				skipEncodingIfExists:   true,
+				addNominalBitrate:      true,
+				addBitsPerPixel:        true,
+			})
 		}
 	case "MPEG-TS":
 		if parsedInfo, parsedStreams, generalFields, ok := ParseMPEGTS(file, stat.Size()); ok {
@@ -360,38 +294,16 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 			if info.DurationSeconds > 0 {
 				general.JSON["Duration"] = fmt.Sprintf("%.9f", info.DurationSeconds)
-				overall := (float64(stat.Size()) * 8) / info.DurationSeconds
-				general.JSON["OverallBitRate"] = strconv.FormatInt(int64(math.Round(overall)), 10)
 			}
+			setOverallBitRate(general.JSON, stat.Size(), info.DurationSeconds)
 			if info.OverallBitrateMin > 0 && info.OverallBitrateMax > 0 {
 				minRate := int64(math.Round(info.OverallBitrateMin))
 				maxRate := int64(math.Round(info.OverallBitrateMax))
 				general.JSONRaw["extra"] = "{\"OverallBitRate_Precision_Min\":\"" + strconv.FormatInt(minRate, 10) + "\",\"OverallBitRate_Precision_Max\":\"" + strconv.FormatInt(maxRate, 10) + "\"}"
 			}
-			if _, err := file.Seek(0, io.SeekStart); err == nil {
-				sniff := make([]byte, 1<<20)
-				n, _ := io.ReadFull(file, sniff)
-				writingLib, encoding := findX264Info(sniff[:n])
-				if writingLib != "" || encoding != "" {
-					for i := range streams {
-						if streams[i].Kind != StreamVideo || findField(streams[i].Fields, "Format") != "AVC" {
-							continue
-						}
-						if writingLib != "" {
-							streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Writing library", Value: writingLib})
-						}
-						if encoding != "" {
-							streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Encoding settings", Value: encoding})
-							if findField(streams[i].Fields, "Nominal bit rate") == "" {
-								if bitrate, ok := findX264Bitrate(encoding); ok {
-									streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Nominal bit rate", Value: formatBitrate(bitrate)})
-								}
-							}
-						}
-						break
-					}
-				}
-			}
+			applyX264Info(file, streams, x264InfoOptions{
+				addNominalBitrate: true,
+			})
 		}
 	case "MPEG-PS":
 		psSize := stat.Size()
@@ -443,7 +355,6 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 				}
 			}
 			var frameCount string
-			var streamSizeSum int64
 			hasAudio := false
 			for _, stream := range streams {
 				if stream.Kind == StreamAudio {
@@ -473,33 +384,20 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 						}
 					}
 					if frameCount == "" && findField(streams[i].Fields, "Format") != "" {
-						duration, durOk := parseDurationSeconds(findField(streams[i].Fields, "Duration"))
-						fps, fpsOk := parseFPS(findField(streams[i].Fields, "Frame rate"))
-						if durOk && fpsOk {
-							frameCount = strconv.Itoa(int(math.Round(duration * fps)))
+						if count, ok := frameCountFromFields(streams[i].Fields); ok {
+							frameCount = count
 						}
 					}
 					if hasAudio {
 						streams[i].JSONSkipStreamOrder = true
 					}
 				}
-				if streams[i].JSON != nil {
-					if value, ok := streams[i].JSON["StreamSize"]; ok {
-						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
-							streamSizeSum += parsed
-						}
-					}
-				}
 			}
 			if frameCount != "" {
 				general.JSON["FrameCount"] = frameCount
 			}
-			if streamSizeSum > 0 {
-				remaining := psSize - streamSizeSum
-				if remaining >= 0 {
-					general.JSON["StreamSize"] = strconv.FormatInt(remaining, 10)
-				}
-			}
+			streamSizeSum := sumStreamSizes(streams, false)
+			setRemainingStreamSize(general.JSON, psSize, streamSizeSum)
 		}
 	case "MPEG Audio":
 		if parsedInfo, parsedStreams, ok := ParseMP3(file, stat.Size()); ok {
@@ -532,39 +430,22 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			general.Fields = appendFieldUnique(general.Fields, Field{Name: " General compliance", Value: "File name extension is not expected for this file format (actual mpg, expected mpgv mpv mp1v m1v mp2v m2v)"})
 			if info.DurationSeconds > 0 {
 				jsonDuration := math.Round(info.DurationSeconds*1000) / 1000
-				if jsonDuration > 0 {
-					overall := (float64(stat.Size()) * 8) / jsonDuration
-					general.JSON["OverallBitRate"] = strconv.FormatInt(int64(math.Round(overall)), 10)
-				}
+				setOverallBitRate(general.JSON, stat.Size(), jsonDuration)
 			}
 			var frameCount string
-			var streamSizeSum int64
 			for i := range streams {
 				streams[i].JSONSkipStreamOrder = true
 				if streams[i].Kind == StreamVideo {
-					duration, durOk := parseDurationSeconds(findField(streams[i].Fields, "Duration"))
-					fps, fpsOk := parseFPS(findField(streams[i].Fields, "Frame rate"))
-					if durOk && fpsOk {
-						frameCount = strconv.Itoa(int(math.Round(duration * fps)))
-					}
-				}
-				if streams[i].JSON != nil {
-					if value, ok := streams[i].JSON["StreamSize"]; ok {
-						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
-							streamSizeSum += parsed
-						}
+					if count, ok := frameCountFromFields(streams[i].Fields); ok {
+						frameCount = count
 					}
 				}
 			}
 			if frameCount != "" {
 				general.JSON["FrameCount"] = frameCount
 			}
-			if streamSizeSum > 0 {
-				remaining := stat.Size() - streamSizeSum
-				if remaining >= 0 {
-					general.JSON["StreamSize"] = strconv.FormatInt(remaining, 10)
-				}
-			}
+			streamSizeSum := sumStreamSizes(streams, false)
+			setRemainingStreamSize(general.JSON, stat.Size(), streamSizeSum)
 			general.JSONRaw = map[string]string{
 				"extra": "{\"FileExtension_Invalid\":\"mpgv mpv mp1v m1v mp2v m2v\",\"ConformanceWarnings\":[{\"GeneralCompliance\":\"File name extension is not expected for this file format (actual mpg, expected mpgv mpv mp1v m1v mp2v m2v)\"}]}",
 			}
@@ -579,38 +460,21 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			streams = parsedStreams
 			if info.DurationSeconds > 0 {
 				jsonDuration := math.Round(info.DurationSeconds*1000) / 1000
-				if jsonDuration > 0 {
-					overall := (float64(stat.Size()) * 8) / jsonDuration
-					general.JSON["OverallBitRate"] = strconv.FormatInt(int64(math.Round(overall)), 10)
-				}
+				setOverallBitRate(general.JSON, stat.Size(), jsonDuration)
 			}
 			var frameCount string
-			var streamSizeSum int64
 			for _, stream := range streams {
 				if stream.Kind == StreamVideo {
-					duration, durOk := parseDurationSeconds(findField(stream.Fields, "Duration"))
-					fps, fpsOk := parseFPS(findField(stream.Fields, "Frame rate"))
-					if durOk && fpsOk {
-						frameCount = strconv.Itoa(int(math.Round(duration * fps)))
-					}
-				}
-				if stream.JSON != nil {
-					if value, ok := stream.JSON["StreamSize"]; ok {
-						if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
-							streamSizeSum += parsed
-						}
+					if count, ok := frameCountFromFields(stream.Fields); ok {
+						frameCount = count
 					}
 				}
 			}
 			if frameCount != "" {
 				general.JSON["FrameCount"] = frameCount
 			}
-			if streamSizeSum > 0 {
-				remaining := stat.Size() - streamSizeSum
-				if remaining >= 0 {
-					general.JSON["StreamSize"] = strconv.FormatInt(remaining, 10)
-				}
-			}
+			streamSizeSum := sumStreamSizes(streams, false)
+			setRemainingStreamSize(general.JSON, stat.Size(), streamSizeSum)
 		}
 	case "DVD Video":
 		if parsed, ok := parseDVDVideo(path, file, stat.Size(), opts); ok {
@@ -778,4 +642,52 @@ func parseFPS(value string) (float64, bool) {
 		}
 	}
 	return parsed, true
+}
+
+type x264InfoOptions struct {
+	skipWritingLibIfExists bool
+	skipEncodingIfExists   bool
+	addNominalBitrate      bool
+	addBitsPerPixel        bool
+}
+
+func applyX264Info(file io.ReadSeeker, streams []Stream, opts x264InfoOptions) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return
+	}
+	sniff := make([]byte, 1<<20)
+	n, _ := io.ReadFull(file, sniff)
+	writingLib, encoding := findX264Info(sniff[:n])
+	if writingLib == "" && encoding == "" {
+		return
+	}
+	for i := range streams {
+		if streams[i].Kind != StreamVideo || findField(streams[i].Fields, "Format") != "AVC" {
+			continue
+		}
+		if writingLib != "" {
+			if !opts.skipWritingLibIfExists || findField(streams[i].Fields, "Writing library") == "" {
+				streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Writing library", Value: writingLib})
+			}
+		}
+		if encoding != "" {
+			if !opts.skipEncodingIfExists || findField(streams[i].Fields, "Encoding settings") == "" {
+				streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Encoding settings", Value: encoding})
+			}
+		}
+		if opts.addNominalBitrate && encoding != "" && findField(streams[i].Fields, "Nominal bit rate") == "" {
+			if bitrate, ok := findX264Bitrate(encoding); ok {
+				streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Nominal bit rate", Value: formatBitrate(bitrate)})
+				if opts.addBitsPerPixel {
+					width, _ := parsePixels(findField(streams[i].Fields, "Width"))
+					height, _ := parsePixels(findField(streams[i].Fields, "Height"))
+					fps, _ := parseFPS(findField(streams[i].Fields, "Frame rate"))
+					if bits := formatBitsPerPixelFrame(bitrate, width, height, fps); bits != "" {
+						streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Bits/(Pixel*Frame)", Value: bits})
+					}
+				}
+			}
+		}
+		break
+	}
 }

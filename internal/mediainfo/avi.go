@@ -53,23 +53,27 @@ func (s *vopScanner) feed(data []byte) {
 		return
 	}
 	buf := append(append([]byte{}, s.carry...), data...)
-	for i := 0; i+4 <= len(buf); i++ {
-		if buf[i] != 0x00 || buf[i+1] != 0x00 || buf[i+2] != 0x01 {
-			continue
-		}
-		if buf[i+3] != 0xB6 {
-			continue
+	stop := false
+	scanMPEG2StartCodes(buf, 0, func(i int, code byte) bool {
+		if code != 0xB6 {
+			return true
 		}
 		if i+4 >= len(buf) {
 			s.carry = append([]byte{}, buf[i:]...)
-			return
+			stop = true
+			return false
 		}
 		vopType := (buf[i+4] >> 6) & 0x03
 		if vopType == 2 {
 			val := true
 			s.bvop = &val
-			return
+			stop = true
+			return false
 		}
+		return true
+	})
+	if stop {
+		return
 	}
 	if len(buf) >= 3 {
 		s.carry = append([]byte{}, buf[len(buf)-3:]...)

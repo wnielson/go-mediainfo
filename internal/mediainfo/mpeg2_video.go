@@ -3,7 +3,6 @@ package mediainfo
 import (
 	"fmt"
 	"math"
-	"strings"
 )
 
 type mpeg2VideoInfo struct {
@@ -75,6 +74,17 @@ type mpeg2VideoParser struct {
 	topFieldFirst     int
 }
 
+func (p *mpeg2VideoParser) recordGOPMCount() {
+	if p.lastAnchorSeen && p.framesSinceAnchor > 0 {
+		if p.gopMCounts == nil {
+			p.gopMCounts = map[int]int{}
+		}
+		p.gopMCounts[p.framesSinceAnchor]++
+	}
+	p.framesSinceAnchor = 0
+	p.lastAnchorSeen = true
+}
+
 func (p *mpeg2VideoParser) consume(data []byte) {
 	buf := append(append([]byte{}, p.carry...), data...)
 	for i := 0; i+4 <= len(buf); i++ {
@@ -116,38 +126,14 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 	_ = br.readBitsValue(1)
 	loadIntra := br.readBitsValue(1)
 	if loadIntra == 1 {
-		matrix := make([]byte, 0, 64)
-		for range 64 {
-			value := br.readBitsValue(8)
-			if len(matrix) < 64 {
-				matrix = append(matrix, byte(value))
-			}
-		}
-		if p.info.MatrixData == "" && len(matrix) == 64 {
-			var builder strings.Builder
-			builder.Grow(128)
-			for _, b := range matrix {
-				fmt.Fprintf(&builder, "%02X", b)
-			}
-			p.info.MatrixData = builder.String()
+		if p.info.MatrixData == "" {
+			p.info.MatrixData = maybeCaptureMPEG2Matrix(br)
 		}
 	}
 	loadNonIntra := br.readBitsValue(1)
 	if loadNonIntra == 1 {
-		matrix := make([]byte, 0, 64)
-		for range 64 {
-			value := br.readBitsValue(8)
-			if len(matrix) < 64 {
-				matrix = append(matrix, byte(value))
-			}
-		}
-		if p.info.MatrixData == "" && len(matrix) == 64 {
-			var builder strings.Builder
-			builder.Grow(128)
-			for _, b := range matrix {
-				fmt.Fprintf(&builder, "%02X", b)
-			}
-			p.info.MatrixData = builder.String()
+		if p.info.MatrixData == "" {
+			p.info.MatrixData = maybeCaptureMPEG2Matrix(br)
 		}
 	}
 
@@ -365,24 +351,10 @@ func (p *mpeg2VideoParser) parsePictureHeader(data []byte) {
 		}
 		p.framesSinceI = 0
 		p.lastISeen = true
-		if p.lastAnchorSeen && p.framesSinceAnchor > 0 {
-			if p.gopMCounts == nil {
-				p.gopMCounts = map[int]int{}
-			}
-			p.gopMCounts[p.framesSinceAnchor]++
-		}
-		p.framesSinceAnchor = 0
-		p.lastAnchorSeen = true
+		p.recordGOPMCount()
 	case 2: // P
 		p.pFrameCount++
-		if p.lastAnchorSeen && p.framesSinceAnchor > 0 {
-			if p.gopMCounts == nil {
-				p.gopMCounts = map[int]int{}
-			}
-			p.gopMCounts[p.framesSinceAnchor]++
-		}
-		p.framesSinceAnchor = 0
-		p.lastAnchorSeen = true
+		p.recordGOPMCount()
 	}
 }
 

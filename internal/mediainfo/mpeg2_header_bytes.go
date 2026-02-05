@@ -6,11 +6,8 @@ func consumeMPEG2HeaderBytes(entry *psStream, payload []byte, hasPTS bool) {
 	}
 	entry.videoHeaderCarry = append(entry.videoHeaderCarry, payload...)
 	buf := entry.videoHeaderCarry
-	for i := 0; i+4 <= len(buf); i++ {
-		if buf[i] != 0x00 || buf[i+1] != 0x00 || buf[i+2] != 0x01 {
-			continue
-		}
-		switch buf[i+3] {
+	scanMPEG2StartCodes(buf, 0, func(_ int, code byte) bool {
+		switch code {
 		case 0xB3:
 			entry.videoHeaderBytes += 12
 			if hasPTS {
@@ -27,11 +24,12 @@ func consumeMPEG2HeaderBytes(entry *psStream, payload []byte, hasPTS bool) {
 		case 0x00:
 			entry.videoHeaderBytes += 6
 		default:
-			if buf[i+3] >= 0x01 && buf[i+3] <= 0xAF {
+			if code >= 0x01 && code <= 0xAF {
 				entry.videoHeaderBytes += 6
 			}
 		}
-	}
+		return true
+	})
 	if len(buf) >= 3 {
 		entry.videoHeaderCarry = append(entry.videoHeaderCarry[:0], buf[len(buf)-3:]...)
 	} else {
@@ -49,15 +47,15 @@ func consumeMPEG2FrameBytes(entry *psStream, payload []byte) {
 	entry.videoFrameCarry = append(entry.videoFrameCarry, payload...)
 	buf := entry.videoFrameCarry
 	basePos := entry.videoFramePos - int64(len(entry.videoFrameCarry))
-	for i := 0; i+4 <= len(buf); i++ {
-		if buf[i] != 0x00 || buf[i+1] != 0x00 || buf[i+2] != 0x01 || buf[i+3] != 0x00 {
-			continue
+	scanMPEG2StartCodes(buf, 0, func(i int, code byte) bool {
+		if code != 0x00 {
+			return true
 		}
 		pos := basePos + int64(i)
 		if !entry.videoFrameStartSet {
 			entry.videoFrameStartSet = true
 			entry.videoFrameStart = pos
-			continue
+			return true
 		}
 		frameBytes := pos - entry.videoFrameStart
 		if frameBytes > 0 {
@@ -65,10 +63,8 @@ func consumeMPEG2FrameBytes(entry *psStream, payload []byte) {
 			entry.videoFrameBytesCount++
 		}
 		entry.videoFrameStart = pos
-		if entry.videoFrameBytesCount >= 2 {
-			break
-		}
-	}
+		return entry.videoFrameBytesCount < 2
+	})
 	if len(buf) >= 3 {
 		entry.videoFrameCarry = append(entry.videoFrameCarry[:0], buf[len(buf)-3:]...)
 	} else {

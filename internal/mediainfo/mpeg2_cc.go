@@ -8,11 +8,7 @@ func consumeMPEG2Captions(entry *psStream, payload []byte, pts uint64, hasPTS bo
 	}
 	entry.videoCCCarry = append(entry.videoCCCarry, payload...)
 	buf := entry.videoCCCarry
-	for i := 0; i+4 <= len(buf); i++ {
-		if buf[i] != 0x00 || buf[i+1] != 0x00 || buf[i+2] != 0x01 {
-			continue
-		}
-		code := buf[i+3]
+	scanMPEG2StartCodes(buf, 0, func(i int, code byte) bool {
 		switch code {
 		case 0x00:
 			entry.videoFrameCount++
@@ -53,7 +49,8 @@ func consumeMPEG2Captions(entry *psStream, payload []byte, pts uint64, hasPTS bo
 				}
 			}
 		}
-	}
+		return true
+	})
 	if len(buf) >= 3 {
 		entry.videoCCCarry = append(entry.videoCCCarry[:0], buf[len(buf)-3:]...)
 	} else {
@@ -61,24 +58,11 @@ func consumeMPEG2Captions(entry *psStream, payload []byte, pts uint64, hasPTS bo
 	}
 }
 
-func nextStartCode(data []byte, start int) int {
-	for i := start; i+3 < len(data); i++ {
-		if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 {
-			return i
-		}
-	}
-	return -1
-}
-
 func parseGA94UserData(data []byte) (bool, int, bool, bool) {
 	if len(data) < 6 {
 		return false, 0, false, false
 	}
-	hasCC := false
-	hasCommand := false
-	hasDisplay := false
-	seenType0 := false
-	seenType1 := false
+	state := ccParseState{}
 	for i := 0; i+5 < len(data); i++ {
 		if data[i] != 'G' || data[i+1] != 'A' || data[i+2] != '9' || data[i+3] != '4' {
 			continue
@@ -102,23 +86,12 @@ func parseGA94UserData(data []byte) (bool, int, bool, bool) {
 			ccData1 := data[idx+1] & 0x7F
 			ccData2 := data[idx+2] & 0x7F
 			if ccValid && (ccTypeVal == 0 || ccTypeVal == 1) {
-				hasCC = true
-				if ccTypeVal == 1 {
-					seenType1 = true
-				} else {
-					seenType0 = true
-				}
-				if (ccData1 == 0x14 || ccData1 == 0x1C || ccData1 == 0x15 || ccData1 == 0x1D) && ccData2 >= 0x20 && ccData2 <= 0x2F {
-					hasCommand = true
-					if ccData2 == 0x2F {
-						hasDisplay = true
-					}
-				}
+				state.apply(ccData1, ccData2, ccTypeVal == 1)
 			}
 			idx += 3
 		}
 	}
-	return resolveCCResult(hasCC, seenType0, seenType1, hasCommand, hasDisplay)
+	return resolveCCResult(state.hasCC, state.seenType0, state.seenType1, state.hasCommand, state.hasDisplay)
 }
 
 func parseDVDUserData(data []byte) (bool, int, bool, bool) {
@@ -143,11 +116,7 @@ func parseDVDUserData(data []byte) (bool, int, bool, bool) {
 		return false, 0, false, false
 	}
 
-	hasCC := false
-	hasCommand := false
-	hasDisplay := false
-	seenType0 := false
-	seenType1 := false
+	state := ccParseState{}
 	idx := 5
 	for j := 0; j < totalBlocks && idx+2 < len(data); j++ {
 		if idx+3 > len(data) {
@@ -168,22 +137,11 @@ func parseDVDUserData(data []byte) (bool, int, bool, bool) {
 		ccData1 := raw1 & 0x7F
 		ccData2 := raw2 & 0x7F
 		if ccData1 != 0 || ccData2 != 0 {
-			hasCC = true
-			if odd {
-				seenType1 = true
-			} else {
-				seenType0 = true
-			}
-			if (ccData1 == 0x14 || ccData1 == 0x1C || ccData1 == 0x15 || ccData1 == 0x1D) && ccData2 >= 0x20 && ccData2 <= 0x2F {
-				hasCommand = true
-				if ccData2 == 0x2F {
-					hasDisplay = true
-				}
-			}
+			state.apply(ccData1, ccData2, odd)
 		}
 		idx += 3
 	}
-	return resolveCCResult(hasCC, seenType0, seenType1, hasCommand, hasDisplay)
+	return resolveCCResult(state.hasCC, state.seenType0, state.seenType1, state.hasCommand, state.hasDisplay)
 }
 
 func parseMPEG2UserData(data []byte) (bool, int, bool, bool) {
@@ -191,6 +149,37 @@ func parseMPEG2UserData(data []byte) (bool, int, bool, bool) {
 		return hasCC, ccType, hasCommand, hasDisplay
 	}
 	return parseDVDUserData(data)
+}
+
+type ccParseState struct {
+	hasCC      bool
+	hasCommand bool
+	hasDisplay bool
+	seenType0  bool
+	seenType1  bool
+}
+
+func (s *ccParseState) apply(ccData1 byte, ccData2 byte, type1 bool) {
+	if ccData1 == 0 && ccData2 == 0 {
+		return
+	}
+	s.hasCC = true
+	if type1 {
+		s.seenType1 = true
+	} else {
+		s.seenType0 = true
+	}
+	if isCCCommand(ccData1, ccData2) {
+		s.hasCommand = true
+		if ccData2 == 0x2F {
+			s.hasDisplay = true
+		}
+	}
+}
+
+func isCCCommand(ccData1 byte, ccData2 byte) bool {
+	return (ccData1 == 0x14 || ccData1 == 0x1C || ccData1 == 0x15 || ccData1 == 0x1D) &&
+		ccData2 >= 0x20 && ccData2 <= 0x2F
 }
 
 func resolveCCResult(hasCC bool, seenType0 bool, seenType1 bool, hasCommand bool, hasDisplay bool) (bool, int, bool, bool) {

@@ -43,14 +43,6 @@ func parseAVCConfig(payload []byte) (string, []Field, h264SPSInfo) {
 	levelID := payload[3]
 	profile := mapAVCProfile(profileID)
 	level := formatAVCLevel(levelID)
-	var fields []Field
-	if profile != "" {
-		if level != "" {
-			fields = append(fields, Field{Name: "Format profile", Value: fmt.Sprintf("%s@%s", profile, level)})
-		} else {
-			fields = append(fields, Field{Name: "Format profile", Value: profile})
-		}
-	}
 
 	spsCount := int(payload[5] & 0x1F)
 	offset := 6
@@ -82,11 +74,35 @@ func parseAVCConfig(payload []byte) (string, []Field, h264SPSInfo) {
 		}
 	}
 
+	fields := buildH264Fields(profile, level, spsInfo, ppsCABAC, h264FieldOptions{
+		includeColorDescription: true,
+	})
+
+	return profile, fields, spsInfo
+}
+
+type h264FieldOptions struct {
+	includeColorDescription bool
+	scanTypeFirst           bool
+}
+
+func buildH264Fields(profile string, level string, spsInfo h264SPSInfo, ppsCABAC *bool, opts h264FieldOptions) []Field {
+	fields := []Field{}
+	if profile != "" {
+		if level != "" {
+			fields = append(fields, Field{Name: "Format profile", Value: fmt.Sprintf("%s@%s", profile, level)})
+		} else {
+			fields = append(fields, Field{Name: "Format profile", Value: profile})
+		}
+	}
 	if spsInfo.ChromaFormat != "" {
 		fields = append(fields, Field{Name: "Chroma subsampling", Value: spsInfo.ChromaFormat})
 	}
 	if spsInfo.BitDepth > 0 {
 		fields = append(fields, Field{Name: "Bit depth", Value: formatBitDepth(uint8(spsInfo.BitDepth))})
+	}
+	if opts.scanTypeFirst && spsInfo.HasScanType {
+		fields = appendH264ScanType(fields, spsInfo)
 	}
 	if spsInfo.HasVideoFmt {
 		if standard := mapH264VideoFormat(spsInfo.VideoFormat); standard != "" {
@@ -96,7 +112,7 @@ func parseAVCConfig(payload []byte) (string, []Field, h264SPSInfo) {
 	if spsInfo.HasColorRange {
 		fields = append(fields, Field{Name: "Color range", Value: spsInfo.ColorRange})
 	}
-	if spsInfo.HasColorDescription {
+	if opts.includeColorDescription && spsInfo.HasColorDescription {
 		if spsInfo.ColorPrimaries != "" {
 			fields = append(fields, Field{Name: "Color primaries", Value: spsInfo.ColorPrimaries})
 		}
@@ -107,12 +123,8 @@ func parseAVCConfig(payload []byte) (string, []Field, h264SPSInfo) {
 			fields = append(fields, Field{Name: "Matrix coefficients", Value: spsInfo.MatrixCoefficients})
 		}
 	}
-	if spsInfo.HasScanType {
-		if spsInfo.Progressive {
-			fields = append(fields, Field{Name: "Scan type", Value: "Progressive"})
-		} else {
-			fields = append(fields, Field{Name: "Scan type", Value: "Interlaced"})
-		}
+	if !opts.scanTypeFirst && spsInfo.HasScanType {
+		fields = appendH264ScanType(fields, spsInfo)
 	}
 	if spsInfo.RefFrames > 0 {
 		fields = append(fields, Field{Name: "Format settings, Reference frames", Value: fmt.Sprintf("%d frames", spsInfo.RefFrames)})
@@ -133,8 +145,14 @@ func parseAVCConfig(payload []byte) (string, []Field, h264SPSInfo) {
 			fields = append(fields, Field{Name: "Format settings", Value: "CABAC"})
 		}
 	}
+	return fields
+}
 
-	return profile, fields, spsInfo
+func appendH264ScanType(fields []Field, spsInfo h264SPSInfo) []Field {
+	if spsInfo.Progressive {
+		return append(fields, Field{Name: "Scan type", Value: "Progressive"})
+	}
+	return append(fields, Field{Name: "Scan type", Value: "Interlaced"})
 }
 
 func parseH264SPS(nal []byte) h264SPSInfo {
@@ -432,48 +450,28 @@ func parseH264AnnexB(payload []byte) ([]Field, uint64, uint64, float64) {
 	var hasSPS bool
 	var ppsCABAC *bool
 	var hasSlice bool
-	start := 0
-	for start+4 <= len(payload) {
-		sc, scLen := findAnnexBStartCode(payload, start)
-		if sc == -1 {
-			break
+	scanAnnexBNALs(payload, func(nal []byte) bool {
+		if len(nal) == 0 {
+			return true
 		}
-		nalStart := sc + scLen
-		next, _ := findAnnexBStartCode(payload, nalStart)
-		nalEnd := next
-		if nalEnd == -1 {
-			nalEnd = len(payload)
+		if nal[0]&0x80 != 0 {
+			return true
 		}
-		if nalStart < nalEnd {
-			nal := payload[nalStart:nalEnd]
-			if len(nal) > 0 {
-				if nal[0]&0x80 != 0 {
-					if next == -1 {
-						break
-					}
-					start = next
-					continue
-				}
-				nalType := nal[0] & 0x1F
-				if nalType == 7 {
-					spsInfo = parseH264SPS(nal)
-					hasSPS = true
-				}
-				if nalType == 8 {
-					if cabac, ok := parseH264PPSCabac(nal); ok {
-						ppsCABAC = &cabac
-					}
-				}
-				if nalType == 1 || nalType == 5 {
-					hasSlice = true
-				}
+		nalType := nal[0] & 0x1F
+		if nalType == 7 {
+			spsInfo = parseH264SPS(nal)
+			hasSPS = true
+		}
+		if nalType == 8 {
+			if cabac, ok := parseH264PPSCabac(nal); ok {
+				ppsCABAC = &cabac
 			}
 		}
-		if next == -1 {
-			break
+		if nalType == 1 || nalType == 5 {
+			hasSlice = true
 		}
-		start = next
-	}
+		return true
+	})
 
 	if !hasSPS || ppsCABAC == nil || !hasSlice {
 		return nil, 0, 0, 0
@@ -490,50 +488,10 @@ func parseH264AnnexB(payload []byte) ([]Field, uint64, uint64, float64) {
 		return nil, 0, 0, 0
 	}
 
-	fields := []Field{}
-	if level := formatAVCLevel(spsInfo.LevelID); level != "" {
-		fields = append(fields, Field{Name: "Format profile", Value: fmt.Sprintf("%s@%s", profile, level)})
-	} else {
-		fields = append(fields, Field{Name: "Format profile", Value: profile})
-	}
-	if spsInfo.ChromaFormat != "" {
-		fields = append(fields, Field{Name: "Chroma subsampling", Value: spsInfo.ChromaFormat})
-	}
-	if spsInfo.BitDepth > 0 {
-		fields = append(fields, Field{Name: "Bit depth", Value: formatBitDepth(uint8(spsInfo.BitDepth))})
-	}
-	if spsInfo.HasScanType {
-		if spsInfo.Progressive {
-			fields = append(fields, Field{Name: "Scan type", Value: "Progressive"})
-		} else {
-			fields = append(fields, Field{Name: "Scan type", Value: "Interlaced"})
-		}
-	}
-	if spsInfo.HasVideoFmt {
-		if standard := mapH264VideoFormat(spsInfo.VideoFormat); standard != "" {
-			fields = append(fields, Field{Name: "Standard", Value: standard})
-		}
-	}
-	if spsInfo.HasColorRange {
-		fields = append(fields, Field{Name: "Color range", Value: spsInfo.ColorRange})
-	}
-	if spsInfo.RefFrames > 0 {
-		fields = append(fields, Field{Name: "Format settings, Reference frames", Value: fmt.Sprintf("%d frames", spsInfo.RefFrames)})
-	}
-	if *ppsCABAC {
-		fields = append(fields, Field{Name: "Format settings, CABAC", Value: "Yes"})
-	} else {
-		fields = append(fields, Field{Name: "Format settings, CABAC", Value: "No"})
-	}
-	if spsInfo.RefFrames > 0 {
-		if *ppsCABAC {
-			fields = append(fields, Field{Name: "Format settings", Value: fmt.Sprintf("CABAC / %d Ref Frames", spsInfo.RefFrames)})
-		} else {
-			fields = append(fields, Field{Name: "Format settings", Value: fmt.Sprintf("%d Ref Frames", spsInfo.RefFrames)})
-		}
-	} else if *ppsCABAC {
-		fields = append(fields, Field{Name: "Format settings", Value: "CABAC"})
-	}
+	level := formatAVCLevel(spsInfo.LevelID)
+	fields := buildH264Fields(profile, level, spsInfo, ppsCABAC, h264FieldOptions{
+		scanTypeFirst: true,
+	})
 	width := uint64(0)
 	height := uint64(0)
 	frameRate := 0.0
@@ -548,43 +506,27 @@ func parseH264AnnexB(payload []byte) ([]Field, uint64, uint64, float64) {
 func h264SliceCountAnnexB(payload []byte) int {
 	counts := map[int]int{}
 	current := 0
-	start := 0
-	for start+4 <= len(payload) {
-		sc, scLen := findAnnexBStartCode(payload, start)
-		if sc == -1 {
-			break
+	scanAnnexBNALs(payload, func(nal []byte) bool {
+		if len(nal) == 0 {
+			return true
 		}
-		nalStart := sc + scLen
-		next, _ := findAnnexBStartCode(payload, nalStart)
-		nalEnd := next
-		if nalEnd == -1 {
-			nalEnd = len(payload)
-		}
-		if nalStart < nalEnd {
-			nal := payload[nalStart:nalEnd]
-			if len(nal) > 0 {
-				nalType := nal[0] & 0x1F
-				switch nalType {
-				case 9:
-					if current > 0 {
-						counts[current]++
-						current = 0
-					}
-				case 1, 5:
-					firstMB, ok := h264FirstMBInSlice(nal)
-					if ok && firstMB == 0 && current > 0 {
-						counts[current]++
-						current = 0
-					}
-					current++
-				}
+		nalType := nal[0] & 0x1F
+		switch nalType {
+		case 9:
+			if current > 0 {
+				counts[current]++
+				current = 0
 			}
+		case 1, 5:
+			firstMB, ok := h264FirstMBInSlice(nal)
+			if ok && firstMB == 0 && current > 0 {
+				counts[current]++
+				current = 0
+			}
+			current++
 		}
-		if next == -1 {
-			break
-		}
-		start = next
-	}
+		return true
+	})
 	if current > 0 {
 		counts[current]++
 	}
@@ -624,6 +566,31 @@ func findAnnexBStartCode(data []byte, start int) (int, int) {
 		}
 	}
 	return -1, 0
+}
+
+func scanAnnexBNALs(payload []byte, fn func(nal []byte) bool) {
+	start := 0
+	for start+4 <= len(payload) {
+		sc, scLen := findAnnexBStartCode(payload, start)
+		if sc == -1 {
+			break
+		}
+		nalStart := sc + scLen
+		next, _ := findAnnexBStartCode(payload, nalStart)
+		nalEnd := next
+		if nalEnd == -1 {
+			nalEnd = len(payload)
+		}
+		if nalStart < nalEnd {
+			if !fn(payload[nalStart:nalEnd]) {
+				return
+			}
+		}
+		if next == -1 {
+			break
+		}
+		start = next
+	}
 }
 
 func isHighProfile(profileID uint64) bool {

@@ -175,15 +175,10 @@ func parseAudioSampleEntry(entry []byte, sampleType string) sampleEntryResult {
 	sampleRate := binary.BigEndian.Uint32(entry[32:36])
 	codecID := sampleType
 	fields := []Field{}
-	if channels > 0 {
-		fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(uint64(channels))})
-		if layout := channelLayout(uint64(channels)); layout != "" {
-			fields = append(fields, Field{Name: "Channel layout", Value: layout})
-		}
-	}
+	fields = appendChannelFields(fields, uint64(channels))
 	if sampleRate > 0 {
 		rate := float64(sampleRate) / 65536
-		fields = append(fields, Field{Name: "Sampling rate", Value: formatSampleRate(rate)})
+		fields = appendSampleRateField(fields, rate)
 		if sampleType == "mp4a" {
 			frameRate := rate / 1024.0
 			fields = append(fields, Field{Name: "Frame rate", Value: fmt.Sprintf("%.3f FPS (1024 SPF)", frameRate)})

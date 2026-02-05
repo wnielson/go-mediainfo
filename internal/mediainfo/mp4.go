@@ -166,33 +166,7 @@ func sliceBox(buf []byte, offset, length int64) []byte {
 }
 
 func parseMvhd(payload []byte) (float64, uint32, bool) {
-	if len(payload) < 20 {
-		return 0, 0, false
-	}
-	version := payload[0]
-	if version == 0 {
-		if len(payload) < 20 {
-			return 0, 0, false
-		}
-		timescale := binary.BigEndian.Uint32(payload[12:16])
-		duration := binary.BigEndian.Uint32(payload[16:20])
-		if timescale == 0 {
-			return 0, 0, false
-		}
-		return float64(duration) / float64(timescale), timescale, true
-	}
-	if version == 1 {
-		if len(payload) < 32 {
-			return 0, 0, false
-		}
-		timescale := binary.BigEndian.Uint32(payload[20:24])
-		duration := binary.BigEndian.Uint64(payload[24:32])
-		if timescale == 0 {
-			return 0, 0, false
-		}
-		return float64(duration) / float64(timescale), timescale, true
-	}
-	return 0, 0, false
+	return parseMP4Duration(payload, 20, 32)
 }
 
 func parseTrak(buf []byte, movieTimescale uint32) (MP4Track, bool) {

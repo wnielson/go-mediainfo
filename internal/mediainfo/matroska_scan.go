@@ -93,47 +93,68 @@ func (er *ebmlReader) skip(n int64) error {
 }
 
 func (er *ebmlReader) readVintID() (uint64, int, error) {
-	first, err := er.readByte()
+	first, length, err := er.readVintHeader()
 	if err != nil {
 		return 0, 0, err
 	}
-	length := vintLength(first)
-	if length == 0 {
-		return 0, 0, io.ErrUnexpectedEOF
-	}
 	value := uint64(first)
-	for i := 1; i < length; i++ {
-		b, err := er.readByte()
-		if err != nil {
-			return 0, 0, err
-		}
-		value = (value << 8) | uint64(b)
-	}
-	return value, length, nil
+	value, err = er.readVintTail(value, length)
+	return value, length, err
 }
 
 func (er *ebmlReader) readVintSize() (uint64, int, error) {
-	first, err := er.readByte()
+	first, length, err := er.readVintHeader()
 	if err != nil {
 		return 0, 0, err
 	}
-	length := vintLength(first)
-	if length == 0 {
-		return 0, 0, io.ErrUnexpectedEOF
-	}
 	mask := byte(0xFF >> length)
 	value := uint64(first & mask)
-	for i := 1; i < length; i++ {
-		b, err := er.readByte()
-		if err != nil {
-			return 0, 0, err
-		}
-		value = (value << 8) | uint64(b)
+	value, err = er.readVintTail(value, length)
+	if err != nil {
+		return 0, 0, err
 	}
 	if value == (uint64(1)<<(uint(length*7)))-1 {
 		return unknownVintSize, length, nil
 	}
 	return value, length, nil
+}
+
+func (er *ebmlReader) readVintHeader() (byte, int, error) {
+	first, err := er.readByte()
+	if err != nil {
+		return 0, 0, err
+	}
+	length := vintLength(first)
+	if length == 0 {
+		return 0, 0, io.ErrUnexpectedEOF
+	}
+	return first, length, nil
+}
+
+func (er *ebmlReader) readVintTail(value uint64, length int) (uint64, error) {
+	for i := 1; i < length; i++ {
+		b, err := er.readByte()
+		if err != nil {
+			return 0, err
+		}
+		value = (value << 8) | uint64(b)
+	}
+	return value, nil
+}
+
+func readMatroskaElementHeader(er *ebmlReader, size int64, start int64) (uint64, uint64, error) {
+	id, _, err := er.readVintID()
+	if err != nil {
+		return 0, 0, err
+	}
+	elemSize, _, err := er.readVintSize()
+	if err != nil {
+		return 0, 0, err
+	}
+	if elemSize == unknownVintSize {
+		elemSize = uint64(size - (er.pos - start))
+	}
+	return id, elemSize, nil
 }
 
 func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale uint64, probes map[uint64]*matroskaAudioProbe) (map[uint64]*matroskaTrackStats, bool) {
@@ -145,16 +166,9 @@ func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale
 	stats := map[uint64]*matroskaTrackStats{}
 
 	for er.pos < size {
-		id, _, err := er.readVintID()
+		id, elemSize, err := readMatroskaElementHeader(er, size, 0)
 		if err != nil {
 			break
-		}
-		elemSize, _, err := er.readVintSize()
-		if err != nil {
-			break
-		}
-		if elemSize == unknownVintSize {
-			elemSize = uint64(size - er.pos)
 		}
 		switch id {
 		case mkvIDCluster:
@@ -174,16 +188,9 @@ func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats 
 	start := er.pos
 	var clusterTimecode int64
 	for er.pos-start < size {
-		id, _, err := er.readVintID()
+		id, elemSize, err := readMatroskaElementHeader(er, size, start)
 		if err != nil {
 			return err
-		}
-		elemSize, _, err := er.readVintSize()
-		if err != nil {
-			return err
-		}
-		if elemSize == unknownVintSize {
-			elemSize = uint64(size - (er.pos - start))
 		}
 		switch id {
 		case mkvIDTimecode:
@@ -222,16 +229,9 @@ func scanMatroskaBlockGroup(er *ebmlReader, size int64, clusterTimecode int64, t
 	var payloadSamples [][]byte
 
 	for er.pos-start < size {
-		id, _, err := er.readVintID()
+		id, elemSize, err := readMatroskaElementHeader(er, size, start)
 		if err != nil {
 			return err
-		}
-		elemSize, _, err := er.readVintSize()
-		if err != nil {
-			return err
-		}
-		if elemSize == unknownVintSize {
-			elemSize = uint64(size - (er.pos - start))
 		}
 		switch id {
 		case mkvIDBlock:

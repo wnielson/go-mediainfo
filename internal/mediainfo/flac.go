@@ -71,12 +71,9 @@ func ParseFLAC(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool) {
 
 	fields := []Field{
 		{Name: "Format", Value: "FLAC"},
-		{Name: "Channel(s)", Value: formatChannels(uint64(channels))},
 	}
-	if layout := channelLayout(uint64(channels)); layout != "" {
-		fields = append(fields, Field{Name: "Channel layout", Value: layout})
-	}
-	fields = append(fields, Field{Name: "Sampling rate", Value: formatSampleRate(float64(sampleRate))})
+	fields = appendChannelFields(fields, uint64(channels))
+	fields = appendSampleRateField(fields, float64(sampleRate))
 	if bitsPerSample > 0 {
 		fields = append(fields, Field{Name: "Bit depth", Value: formatBitDepth(bitsPerSample)})
 	}
