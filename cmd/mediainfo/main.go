@@ -61,7 +61,7 @@ var updateCmd = &cobra.Command{
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print MediaInfo version information",
+	Short: "Print go-mediainfo version information",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		cli.Version(cmd.OutOrStdout())
 		return nil
@@ -105,7 +105,7 @@ func runSelfUpdate(ctx context.Context) error {
 	}
 
 	if latest.LessOrEqual(version) {
-		fmt.Printf("Current binary is the latest version: %s\n", version)
+		fmt.Printf("Current binary is the latest version: %s\n", mediainfo.FormatVersion(version))
 		return nil
 	}
 
@@ -118,7 +118,7 @@ func runSelfUpdate(ctx context.Context) error {
 		return fmt.Errorf("error occurred while updating binary: %w", err)
 	}
 
-	fmt.Printf("Successfully updated to version: %s\n", latest.Version())
+	fmt.Printf("Successfully updated to version: %s\n", mediainfo.FormatVersion(latest.Version()))
 	return nil
 }
 

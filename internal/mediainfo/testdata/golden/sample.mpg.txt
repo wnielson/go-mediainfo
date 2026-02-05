@@ -36,3 +36,5 @@ GOP, Open/Closed                         : Open
 GOP, Open/Closed of first frame          : Closed
 Stream size                              : 694 KiB (100%)
 
+ReportBy : go-mediainfo - dev
+

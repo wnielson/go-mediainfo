@@ -18,9 +18,16 @@ func RenderText(reports []Report) string {
 			title := streamTitle(stream.Kind, index, total)
 			writeStream(&buf, title, stream)
 		})
+		buf.WriteString("\n")
+		buf.WriteString(reportByLine())
+		buf.WriteString("\n")
 	}
 	output := strings.TrimRight(buf.String(), "\n")
 	return output + "\n\n"
+}
+
+func reportByLine() string {
+	return fmt.Sprintf("ReportBy : %s - %s", AppName, FormatVersion(AppVersion))
 }
 
 func writeStream(buf *bytes.Buffer, title string, stream Stream) {

@@ -29,7 +29,7 @@ func Help(program string, stdout io.Writer) {
 	fmt.Fprintln(stdout, "                    Display list of inform= parameters")
 	fmt.Fprintln(stdout, "")
 	fmt.Fprintln(stdout, "Commands:")
-	fmt.Fprintln(stdout, "version              Print MediaInfo version information")
+	fmt.Fprintln(stdout, "version              Print go-mediainfo version information")
 	fmt.Fprintln(stdout, "update               Update mediainfo to latest version (release builds only)")
 }
 

@@ -33,3 +33,5 @@ Bits/(Pixel*Frame)                       : 0.269
 Stream size                              : 910 KiB (92%)
 Writing library                          : Lavc62.11.100
 
+ReportBy : go-mediainfo - dev
+

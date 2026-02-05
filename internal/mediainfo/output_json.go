@@ -40,7 +40,7 @@ func buildJSONPayload(report Report) jsonPayloadOut {
 func jsonCreatingLibraryFields() []jsonKV {
 	return []jsonKV{
 		{Key: "name", Val: AppName},
-		{Key: "version", Val: AppVersion},
+		{Key: "version", Val: FormatVersion(AppVersion)},
 		{Key: "url", Val: AppURL},
 	}
 }

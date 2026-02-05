@@ -15,3 +15,5 @@ Channel(s)                               : 1 channel
 Channel layout                           : M
 Sampling rate                            : 48.0 kHz
 
+ReportBy : go-mediainfo - dev
+
