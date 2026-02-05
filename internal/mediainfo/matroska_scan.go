@@ -50,6 +50,7 @@ type matroskaVideoProbe struct {
 }
 
 const matroskaVideoProbeMaxBytes = 256 * 1024
+const ebmlSkipSeekMin = 4 * 1024
 
 func (s *matroskaTrackStats) addBlock(timeNs int64, dataBytes int64, durationNs int64, frames int64) {
 	if dataBytes > 0 {
@@ -123,11 +124,29 @@ func (er *ebmlReader) skip(n int64) error {
 	if n <= 0 {
 		return nil
 	}
-	if n >= 64*1024 && er.rs != nil {
-		if _, err := er.rs.Seek(er.pos+n, io.SeekStart); err == nil {
-			er.pos += n
-			er.r.Reset(er.rs)
-			return nil
+	if er.rs != nil {
+		// Never read bytes just to drop them: consume what's already buffered, seek the rest.
+		if buffered := er.r.Buffered(); buffered > 0 {
+			toDiscard := int64(buffered)
+			if toDiscard > n {
+				toDiscard = n
+			}
+			discarded, err := er.r.Discard(int(toDiscard))
+			er.pos += int64(discarded)
+			n -= int64(discarded)
+			if err != nil && err != bufio.ErrBufferFull {
+				return err
+			}
+			if n <= 0 {
+				return nil
+			}
+		}
+		if n >= ebmlSkipSeekMin {
+			if _, err := er.rs.Seek(er.pos+n, io.SeekStart); err == nil {
+				er.pos += n
+				er.r.Reset(er.rs)
+				return nil
+			}
 		}
 	}
 	for n > 0 {
@@ -392,6 +411,11 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 	headerLen := int64(trackLen + 3)
 	frameCount := int64(1)
 	lacing := (flags >> 1) & 0x03
+	audioProbe := audioProbes[trackVal]
+	videoProbe := videoProbes[trackVal]
+	needAudio := audioProbe != nil && (!audioProbe.ok || audioProbe.collect)
+	needVideo := videoProbeNeedsSample(videoProbe)
+	needProbePayload := needAudio || needVideo
 	var laceSizes []int64
 	var laceSum int64
 	if lacing != 0 {
@@ -403,7 +427,9 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 		frameCount = int64(countByte) + 1
 		switch lacing {
 		case 1: // Xiph
-			laceSizes = make([]int64, frameCount-1)
+			if needProbePayload && frameCount > 1 {
+				laceSizes = make([]int64, frameCount-1)
+			}
 			for i := int64(0); i < frameCount-1; i++ {
 				size := int64(0)
 				for {
@@ -417,7 +443,9 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 						break
 					}
 				}
-				laceSizes[i] = size
+				if needProbePayload {
+					laceSizes[i] = size
+				}
 				laceSum += size
 			}
 		case 3: // EBML
@@ -445,7 +473,9 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 				bias := int64(1)<<(uint(length*7-1)) - 1
 				return int64(value) - bias, length, nil
 			}
-			laceSizes = make([]int64, frameCount-1)
+			if needProbePayload && frameCount > 1 {
+				laceSizes = make([]int64, frameCount-1)
+			}
 			firstSizeByte, err := er.readByte()
 			if err != nil {
 				return 0, 0, 0, 0, err
@@ -455,7 +485,9 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 				return 0, 0, 0, 0, err
 			}
 			headerLen += int64(length)
-			laceSizes[0] = int64(sizeVal)
+			if needProbePayload {
+				laceSizes[0] = int64(sizeVal)
+			}
 			laceSum = int64(sizeVal)
 			prev := int64(sizeVal)
 			for i := int64(1); i < frameCount-1; i++ {
@@ -469,38 +501,31 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 				}
 				headerLen += int64(length)
 				size := prev + diff
-				laceSizes[i] = size
+				if needProbePayload {
+					laceSizes[i] = size
+				}
 				laceSum += size
 				prev = size
 			}
 		}
 	}
 	dataSize := size - headerLen
-	frameSizes := []int64{dataSize}
-	if frameCount > 1 {
-		frameSizes = make([]int64, frameCount)
-		switch lacing {
-		case 1, 3:
-			copy(frameSizes, laceSizes)
-			last := max(dataSize-laceSum, 0)
-			frameSizes[frameCount-1] = last
-		case 2:
-			if frameCount > 0 {
-				frameSize := dataSize / frameCount
-				for i := int64(0); i < frameCount; i++ {
-					frameSizes[i] = frameSize
-				}
-			}
-		}
-	}
 	if dataSize > 0 {
-		audioProbe := audioProbes[trackVal]
-		videoProbe := videoProbes[trackVal]
-		needAudio := audioProbe != nil && (!audioProbe.ok || audioProbe.collect)
-		needVideo := videoProbeNeedsSample(videoProbe)
-		if needAudio || needVideo {
+		if needProbePayload {
 			for i := int64(0); i < frameCount; i++ {
-				size := frameSizes[i]
+				size := dataSize
+				if frameCount > 1 {
+					switch lacing {
+					case 1, 3:
+						if i < frameCount-1 {
+							size = laceSizes[i]
+						} else {
+							size = max(dataSize-laceSum, 0)
+						}
+					case 2:
+						size = dataSize / frameCount
+					}
+				}
 				peek := int64(256)
 				if needVideo {
 					peek = int64(matroskaVideoProbeMaxBytes)
