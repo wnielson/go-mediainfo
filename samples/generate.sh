@@ -79,10 +79,33 @@ ffmpeg -hide_banner -loglevel error \
   -c:a ac3 -b:a 192k -ac 2 \
   -f vob -shortest "$tmp/sample_ac3.vob"
 
-for f in sample.mp4 sample.mkv sample.ts sample.avi sample.mpg sample.vob sample_ac3.vob; do
+ffmpeg -hide_banner -loglevel error \
+  -f lavfi -i "sine=frequency=1000:sample_rate=${sr}:duration=${dur}" \
+  -map_metadata -1 \
+  -c:a libmp3lame -b:a 128k \
+  "$tmp/sample.mp3"
+
+ffmpeg -hide_banner -loglevel error \
+  -f lavfi -i "sine=frequency=1000:sample_rate=${sr}:duration=${dur}" \
+  -map_metadata -1 \
+  -c:a flac \
+  "$tmp/sample.flac"
+
+ffmpeg -hide_banner -loglevel error \
+  -f lavfi -i "sine=frequency=1000:sample_rate=${sr}:duration=${dur}" \
+  -map_metadata -1 \
+  -c:a pcm_s16le \
+  "$tmp/sample.wav"
+
+ffmpeg -hide_banner -loglevel error \
+  -f lavfi -i "sine=frequency=1000:sample_rate=${sr}:duration=${dur}" \
+  -map_metadata -1 \
+  -c:a libopus -b:a 96k \
+  "$tmp/sample.ogg"
+
+for f in sample.mp4 sample.mkv sample.ts sample.avi sample.mpg sample.vob sample_ac3.vob sample.mp3 sample.flac sample.wav sample.ogg; do
   mv -f "$tmp/$f" "$out/$f"
 done
 
 echo "sha256:"
 shasum -a 256 "$out"/sample*.*
-
