@@ -2,6 +2,7 @@ package mediainfo
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"io"
 	"os"
@@ -25,6 +26,8 @@ type psPending struct {
 	payloadPos int
 	skip       int
 }
+
+var pesStartPrefix = []byte{0x00, 0x00, 0x01}
 
 func newPSStreamParser() *psStreamParser {
 	return &psStreamParser{
@@ -404,12 +407,22 @@ func (p *psStreamParser) consumePayload(entry *psStream, key uint16, flags byte,
 }
 
 func findPESStart(data []byte, start int) int {
-	for i := start; i+3 < len(data); i++ {
-		if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 {
-			if isPESStreamID(data[i+3]) {
-				return i
-			}
+	if start < 0 {
+		start = 0
+	}
+	if start+4 > len(data) {
+		return -1
+	}
+	for pos := start; pos+4 <= len(data); {
+		idx := bytes.Index(data[pos:], pesStartPrefix)
+		if idx < 0 {
+			return -1
 		}
+		i := pos + idx
+		if i+3 < len(data) && isPESStreamID(data[i+3]) {
+			return i
+		}
+		pos = i + 1
 	}
 	return -1
 }
