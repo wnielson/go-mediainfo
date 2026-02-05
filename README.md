@@ -58,6 +58,7 @@ mediainfo version
 Path is required (file or directory).
 
 Default output: text.
+Footer includes `ReportBy : go-mediainfo - vX.Y.Z`.
 
 ## Options
 
@@ -72,4 +73,4 @@ Default output: text.
 ## Commands
 
 - `update` (self-update this binary; release builds only)
-- `version` (print MediaInfo version)
+- `version` (print go-mediainfo version)
