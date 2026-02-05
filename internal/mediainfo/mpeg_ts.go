@@ -846,54 +846,74 @@ func scanTSForH264(file io.ReadSeeker, pid uint16, size int64) ([]Field, uint64,
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return nil, 0, 0, 0
 	}
-	reader := bufio.NewReaderSize(file, 188*200)
-	packet := make([]byte, 188)
+	reader := bufio.NewReaderSize(file, 1<<20)
+	const tsPacketSize = 188
+	buf := make([]byte, tsPacketSize*2048)
 	var pesData []byte
 	readPackets := int64(0)
 	maxPackets := int64(0)
 	if size > 0 {
-		maxPackets = size / 188
+		maxPackets = size / tsPacketSize
 	}
+	carry := 0
 	for maxPackets == 0 || readPackets < maxPackets {
-		_, err := io.ReadFull(reader, packet)
-		if err != nil {
+		n, err := reader.Read(buf[carry:])
+		if n == 0 && err != nil {
 			break
 		}
-		readPackets++
-		if packet[0] != 0x47 {
-			continue
-		}
-		pktPid := uint16(packet[1]&0x1F)<<8 | uint16(packet[2])
-		if pktPid != pid {
-			continue
-		}
-		payloadStart := packet[1]&0x40 != 0
-		adaptation := (packet[3] & 0x30) >> 4
-		payloadIndex := 4
-		switch adaptation {
-		case 2:
-			continue
-		case 3:
-			adaptLen := int(packet[4])
-			payloadIndex += 1 + adaptLen
-		}
-		if payloadIndex >= len(packet) {
-			continue
-		}
-		payload := packet[payloadIndex:]
-		if payloadStart && len(payload) >= 9 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01 {
-			if len(pesData) > 0 {
-				if fields, width, height, fps := parseH264AnnexB(pesData); len(fields) > 0 {
-					return fields, width, height, fps
-				}
+		n += carry
+		packetCount := n / tsPacketSize
+		for i := 0; i < packetCount; i++ {
+			packet := buf[i*tsPacketSize : (i+1)*tsPacketSize]
+			readPackets++
+			if maxPackets > 0 && readPackets > maxPackets {
+				break
 			}
-			headerLen := int(payload[8])
-			dataStart := min(9+headerLen, len(payload))
-			pesData = append(pesData[:0], payload[dataStart:]...)
-			continue
+			if packet[0] != 0x47 {
+				continue
+			}
+			pktPid := uint16(packet[1]&0x1F)<<8 | uint16(packet[2])
+			if pktPid != pid {
+				continue
+			}
+			payloadStart := packet[1]&0x40 != 0
+			adaptation := (packet[3] & 0x30) >> 4
+			payloadIndex := 4
+			switch adaptation {
+			case 2:
+				continue
+			case 3:
+				adaptLen := int(packet[4])
+				payloadIndex += 1 + adaptLen
+			}
+			if payloadIndex >= len(packet) {
+				continue
+			}
+			payload := packet[payloadIndex:]
+			if payloadStart && len(payload) >= 9 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01 {
+				if len(pesData) > 0 {
+					if fields, width, height, fps := parseH264AnnexB(pesData); len(fields) > 0 {
+						return fields, width, height, fps
+					}
+				}
+				headerLen := int(payload[8])
+				dataStart := min(9+headerLen, len(payload))
+				pesData = append(pesData[:0], payload[dataStart:]...)
+				continue
+			}
+			if len(pesData) > 0 {
+				pesData = append(pesData, payload...)
+			}
 		}
-		if len(pesData) > 0 {
-			pesData = append(pesData, payload...)
+		carry = n - packetCount*tsPacketSize
+		if carry > 0 {
+			copy(buf, buf[packetCount*tsPacketSize:n])
+		}
+		if maxPackets > 0 && readPackets >= maxPackets {
+			break
+		}
+		if err != nil {
+			break
 		}
 	}
 	if len(pesData) > 0 {
