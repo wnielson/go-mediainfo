@@ -61,6 +61,19 @@ const (
 	mkvIDPixelCropLeft     = 0x54CC
 	mkvIDPixelCropRight    = 0x54DD
 	mkvIDColour            = 0x55B0
+	mkvIDMasteringMetadata = 0x55D0
+	mkvIDMasteringPrimRx   = 0x55D1
+	mkvIDMasteringPrimRy   = 0x55D2
+	mkvIDMasteringPrimGx   = 0x55D3
+	mkvIDMasteringPrimGy   = 0x55D4
+	mkvIDMasteringPrimBx   = 0x55D5
+	mkvIDMasteringPrimBy   = 0x55D6
+	mkvIDMasteringWhiteX   = 0x55D7
+	mkvIDMasteringWhiteY   = 0x55D8
+	mkvIDMasteringLumMax   = 0x55D9
+	mkvIDMasteringLumMin   = 0x55DA
+	mkvIDMaxCLL            = 0x55BC
+	mkvIDMaxFALL           = 0x55BD
 	mkvIDRange             = 0x55B9
 	mkvIDColourPrimaries   = 0x55BB
 	mkvIDTransferChar      = 0x55BA
@@ -715,6 +728,10 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		fields = append(fields, avcFields...)
 		spsInfo = avcInfo
 	}
+	if kind == StreamVideo && codecID == "V_MPEGH/ISO/HEVC" && len(codecPrivate) > 0 {
+		_, hevcFields, _ := parseHEVCConfig(codecPrivate)
+		fields = append(fields, hevcFields...)
+	}
 	if spsInfo.CodedWidth > 0 {
 		videoInfo.codedWidth = spsInfo.CodedWidth
 	}
@@ -752,35 +769,21 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		}
 		displayWidth := videoInfo.displayWidth
 		displayHeight := videoInfo.displayHeight
-		if displayWidth == 0 && storedWidth > 0 {
-			crop := videoInfo.cropLeft + videoInfo.cropRight
-			if crop > 0 && crop < storedWidth {
-				displayWidth = storedWidth - crop
-			} else {
-				displayWidth = storedWidth
-			}
+		if videoInfo.displayUnit != 0 {
+			displayWidth = 0
+			displayHeight = 0
 		}
-		if displayHeight == 0 && storedHeight > 0 {
-			crop := videoInfo.cropTop + videoInfo.cropBottom
-			if crop > 0 && crop < storedHeight {
-				displayHeight = storedHeight - crop
-			} else {
-				displayHeight = storedHeight
-			}
+		if storedWidth > 0 {
+			fields = append(fields, Field{Name: "Width", Value: formatPixels(storedWidth)})
 		}
-		if displayWidth > 0 {
-			fields = append(fields, Field{Name: "Width", Value: formatPixels(displayWidth)})
+		if storedHeight > 0 {
+			fields = append(fields, Field{Name: "Height", Value: formatPixels(storedHeight)})
 		}
-		if displayHeight > 0 {
-			fields = append(fields, Field{Name: "Height", Value: formatPixels(displayHeight)})
-		}
-		aspectW := displayWidth
-		aspectH := displayHeight
-		if aspectW == 0 {
-			aspectW = storedWidth
-		}
-		if aspectH == 0 {
-			aspectH = storedHeight
+		aspectW := storedWidth
+		aspectH := storedHeight
+		if displayWidth > 0 && displayHeight > 0 {
+			aspectW = displayWidth
+			aspectH = displayHeight
 		}
 		if ar := formatAspectRatio(aspectW, aspectH); ar != "" {
 			fields = append(fields, Field{Name: "Display aspect ratio", Value: ar})
@@ -805,9 +808,9 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 				fields = append(fields, Field{Name: "Maximum bit rate", Value: formatBitrate(float64(bitRate))})
 				fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
 			}
-			if defaultDuration > 0 && displayWidth > 0 && displayHeight > 0 {
+			if defaultDuration > 0 && storedWidth > 0 && storedHeight > 0 {
 				rate := 1e9 / float64(defaultDuration)
-				if bits := formatBitsPerPixelFrame(float64(bitRate), displayWidth, displayHeight, rate); bits != "" {
+				if bits := formatBitsPerPixelFrame(float64(bitRate), storedWidth, storedHeight, rate); bits != "" {
 					fields = append(fields, Field{Name: "Bits/(Pixel*Frame)", Value: bits})
 				}
 			}
@@ -823,6 +826,20 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		}
 		if videoInfo.matrixCoefficients != "" && findField(fields, "Matrix coefficients") == "" {
 			fields = append(fields, Field{Name: "Matrix coefficients", Value: videoInfo.matrixCoefficients})
+		}
+		if videoInfo.masteringPresent {
+			if videoInfo.masteringPrimaries != "" && findField(fields, "Mastering display color primaries") == "" {
+				fields = append(fields, Field{Name: "Mastering display color primaries", Value: videoInfo.masteringPrimaries})
+			}
+			if videoInfo.masteringLuminanceMax > 0 && videoInfo.masteringLuminanceMin > 0 && findField(fields, "Mastering display luminance") == "" {
+				fields = append(fields, Field{Name: "Mastering display luminance", Value: formatMasteringLuminance(videoInfo.masteringLuminanceMin, videoInfo.masteringLuminanceMax)})
+			}
+		}
+		if videoInfo.maxCLL > 0 && findField(fields, "Maximum Content Light Level") == "" {
+			fields = append(fields, Field{Name: "Maximum Content Light Level", Value: fmt.Sprintf("%d cd/m2", videoInfo.maxCLL)})
+		}
+		if videoInfo.maxFALL > 0 && findField(fields, "Maximum Frame-Average Light Level") == "" {
+			fields = append(fields, Field{Name: "Maximum Frame-Average Light Level", Value: fmt.Sprintf("%d cd/m2", videoInfo.maxFALL)})
 		}
 		if findField(fields, "Color space") == "" && (videoInfo.colorRange != "" || videoInfo.colorPrimaries != "" || videoInfo.transferCharacteristics != "" || videoInfo.matrixCoefficients != "") {
 			if matroskaHasStreamColor(videoInfo) {
@@ -1013,6 +1030,8 @@ type matroskaVideoInfo struct {
 	pixelHeight             uint64
 	displayWidth            uint64
 	displayHeight           uint64
+	displayUnit             uint64
+	aspectRatioType         uint64
 	codedWidth              uint64
 	codedHeight             uint64
 	cropTop                 uint64
@@ -1027,6 +1046,12 @@ type matroskaVideoInfo struct {
 	transferSource          string
 	matrixCoefficients      string
 	matrixSource            string
+	masteringPrimaries      string
+	masteringLuminanceMin   float64
+	masteringLuminanceMax   float64
+	masteringPresent        bool
+	maxCLL                  uint64
+	maxFALL                 uint64
 }
 
 func parseMatroskaVideo(buf []byte) matroskaVideoInfo {
@@ -1063,6 +1088,14 @@ func parseMatroskaVideo(buf []byte) matroskaVideoInfo {
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
 				info.displayHeight = value
 			}
+		case mkvIDDisplayUnit:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				info.displayUnit = value
+			}
+		case mkvIDAspectRatioType:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				info.aspectRatioType = value
+			}
 		case mkvIDPixelCropTop:
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
 				info.cropTop = value
@@ -1080,22 +1113,34 @@ func parseMatroskaVideo(buf []byte) matroskaVideoInfo {
 				info.cropRight = value
 			}
 		case mkvIDColour:
-			rangeValue, primaries, transfer, matrix := parseMatroskaColour(buf[dataStart:dataEnd])
-			if rangeValue != "" {
-				info.colorRange = rangeValue
+			colour := parseMatroskaColour(buf[dataStart:dataEnd])
+			if colour.rangeValue != "" {
+				info.colorRange = colour.rangeValue
 				info.colorRangeSource = "Container"
 			}
-			if primaries != "" {
-				info.colorPrimaries = primaries
+			if colour.primaries != "" {
+				info.colorPrimaries = colour.primaries
 				info.colorPrimariesSource = "Container"
 			}
-			if transfer != "" {
-				info.transferCharacteristics = transfer
+			if colour.transfer != "" {
+				info.transferCharacteristics = colour.transfer
 				info.transferSource = "Container"
 			}
-			if matrix != "" {
-				info.matrixCoefficients = matrix
+			if colour.matrix != "" {
+				info.matrixCoefficients = colour.matrix
 				info.matrixSource = "Container"
+			}
+			if colour.masteringPresent {
+				info.masteringPresent = true
+				info.masteringLuminanceMax = colour.masteringLuminanceMax
+				info.masteringLuminanceMin = colour.masteringLuminanceMin
+				info.masteringPrimaries = colour.masteringPrimaries
+			}
+			if colour.maxCLL > 0 {
+				info.maxCLL = colour.maxCLL
+			}
+			if colour.maxFALL > 0 {
+				info.maxFALL = colour.maxFALL
 			}
 		}
 		pos = dataEnd
@@ -1138,12 +1183,22 @@ func parseMatroskaAudio(buf []byte) (uint64, float64) {
 	return channels, sampleRate
 }
 
-func parseMatroskaColour(buf []byte) (string, string, string, string) {
+type matroskaColourInfo struct {
+	rangeValue            string
+	primaries             string
+	transfer              string
+	matrix                string
+	masteringPrimaries    string
+	masteringLuminanceMin float64
+	masteringLuminanceMax float64
+	masteringPresent      bool
+	maxCLL                uint64
+	maxFALL               uint64
+}
+
+func parseMatroskaColour(buf []byte) matroskaColourInfo {
+	info := matroskaColourInfo{}
 	pos := 0
-	var rangeValue string
-	var primaries string
-	var transfer string
-	var matrix string
 	for pos < len(buf) {
 		id, idLen, ok := readVintID(buf, pos)
 		if !ok {
@@ -1163,35 +1218,198 @@ func parseMatroskaColour(buf []byte) (string, string, string, string) {
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
 				switch value {
 				case 1:
-					rangeValue = "Limited"
+					info.rangeValue = "Limited"
 				case 2:
-					rangeValue = "Full"
+					info.rangeValue = "Full"
 				}
 			}
 		case mkvIDColourPrimaries:
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
-				primaries = matroskaColorName(value)
+				info.primaries = matroskaColorPrimariesName(value)
 			}
 		case mkvIDTransferChar:
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
-				transfer = matroskaColorName(value)
+				info.transfer = matroskaTransferName(value)
 			}
 		case mkvIDMatrixCoeffs:
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
-				matrix = matroskaColorName(value)
+				info.matrix = matroskaMatrixName(value)
+			}
+		case mkvIDMasteringMetadata:
+			mastering := parseMatroskaMasteringMetadata(buf[dataStart:dataEnd])
+			if mastering.present {
+				info.masteringPresent = true
+				info.masteringLuminanceMax = mastering.luminanceMax
+				info.masteringLuminanceMin = mastering.luminanceMin
+			}
+		case mkvIDMaxCLL:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				info.maxCLL = value
+			}
+		case mkvIDMaxFALL:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				info.maxFALL = value
 			}
 		}
 		pos = dataEnd
 	}
-	return rangeValue, primaries, transfer, matrix
+	if info.masteringPresent && info.primaries != "" {
+		info.masteringPrimaries = info.primaries
+	}
+	return info
 }
 
-func matroskaColorName(value uint64) string {
+type matroskaMasteringInfo struct {
+	luminanceMin float64
+	luminanceMax float64
+	present      bool
+}
+
+func parseMatroskaMasteringMetadata(buf []byte) matroskaMasteringInfo {
+	info := matroskaMasteringInfo{}
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		switch id {
+		case mkvIDMasteringLumMax:
+			if value, ok := readFloat(buf[dataStart:dataEnd]); ok {
+				info.luminanceMax = value
+				info.present = true
+			} else if valueInt, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				info.luminanceMax = float64(valueInt)
+				info.present = true
+			}
+		case mkvIDMasteringLumMin:
+			if value, ok := readFloat(buf[dataStart:dataEnd]); ok {
+				info.luminanceMin = value
+				info.present = true
+			} else if valueInt, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				info.luminanceMin = float64(valueInt)
+				info.present = true
+			}
+		case mkvIDMasteringPrimRx, mkvIDMasteringPrimRy, mkvIDMasteringPrimGx, mkvIDMasteringPrimGy, mkvIDMasteringPrimBx, mkvIDMasteringPrimBy, mkvIDMasteringWhiteX, mkvIDMasteringWhiteY:
+			if _, ok := readFloat(buf[dataStart:dataEnd]); ok {
+				info.present = true
+			} else if _, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				info.present = true
+			}
+		}
+		pos = dataEnd
+	}
+	return info
+}
+
+func matroskaColorPrimariesName(value uint64) string {
 	switch value {
 	case 1:
 		return "BT.709"
+	case 4:
+		return "BT.470M"
+	case 5:
+		return "BT.470BG"
+	case 6:
+		return "SMPTE 170M"
+	case 7:
+		return "SMPTE 240M"
+	case 8:
+		return "Film"
+	case 9:
+		return "BT.2020"
+	case 10:
+		return "SMPTE ST 428-1"
 	default:
 		return ""
+	}
+}
+
+func matroskaTransferName(value uint64) string {
+	switch value {
+	case 1:
+		return "BT.709"
+	case 4:
+		return "BT.470M"
+	case 5:
+		return "BT.470BG"
+	case 6:
+		return "SMPTE 170M"
+	case 7:
+		return "SMPTE 240M"
+	case 8:
+		return "Linear"
+	case 9:
+		return "Log"
+	case 10:
+		return "Log Sqrt"
+	case 11:
+		return "IEC 61966-2-4"
+	case 12:
+		return "BT.1361"
+	case 13:
+		return "IEC 61966-2-1"
+	case 14:
+		return "BT.2020 10-bit"
+	case 15:
+		return "BT.2020 12-bit"
+	case 16:
+		return "PQ"
+	case 17:
+		return "SMPTE ST 428-1"
+	case 18:
+		return "HLG"
+	default:
+		return ""
+	}
+}
+
+func matroskaMatrixName(value uint64) string {
+	switch value {
+	case 1:
+		return "BT.709"
+	case 4:
+		return "FCC"
+	case 5:
+		return "BT.470BG"
+	case 6:
+		return "SMPTE 170M"
+	case 7:
+		return "SMPTE 240M"
+	case 8:
+		return "YCgCo"
+	case 9:
+		return "BT.2020 non-constant"
+	case 10:
+		return "BT.2020 constant"
+	default:
+		return ""
+	}
+}
+
+func formatMasteringLuminance(minVal, maxVal float64) string {
+	return fmt.Sprintf("min: %s cd/m2, max: %s cd/m2", formatHDRLuminance(minVal), formatHDRLuminance(maxVal))
+}
+
+func formatHDRLuminance(value float64) string {
+	switch {
+	case value >= 100:
+		return fmt.Sprintf("%.0f", value)
+	case value >= 10:
+		return fmt.Sprintf("%.1f", value)
+	case value >= 1:
+		return fmt.Sprintf("%.2f", value)
+	default:
+		return fmt.Sprintf("%.4f", value)
 	}
 }
 

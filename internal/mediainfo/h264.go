@@ -302,9 +302,9 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 				primaries := br.readBitsValue(8)
 				transfer := br.readBitsValue(8)
 				matrix := br.readBitsValue(8)
-				colorPrimaries = matroskaColorName(primaries)
-				transferCharacteristics = matroskaColorName(transfer)
-				matrixCoefficients = matroskaColorName(matrix)
+				colorPrimaries = matroskaColorPrimariesName(primaries)
+				transferCharacteristics = matroskaTransferName(transfer)
+				matrixCoefficients = matroskaMatrixName(matrix)
 				hasColorDescription = true
 			}
 		}
