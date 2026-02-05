@@ -1,6 +1,9 @@
 package mediainfo
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestParseMatroskaTracks(t *testing.T) {
 	buf := buildMatroskaSample()
@@ -112,6 +115,60 @@ func TestParseMatroskaTagStatsWithoutDate(t *testing.T) {
 	}
 	if !stats.hasDataBytes || !stats.hasDuration || !stats.hasFrameCount || !stats.hasBitRate {
 		t.Fatalf("missing parsed stats: %+v", stats)
+	}
+}
+
+func TestParseMatroskaTrackEntryHeaderStripping(t *testing.T) {
+	compression := buildMatroskaElement(mkvIDContentCompression,
+		append(
+			buildMatroskaElement(mkvIDContentCompAlgo, encodeMatroskaUint(3)),
+			buildMatroskaElement(mkvIDContentCompSettings, []byte{0x0B, 0x77})...,
+		),
+	)
+	encoding := buildMatroskaElement(mkvIDContentEncoding, compression)
+	entry := append(
+		buildMatroskaElement(mkvIDTrackType, encodeMatroskaUint(2)),
+		buildMatroskaElement(mkvIDTrackNumber, encodeMatroskaUint(1))...,
+	)
+	entry = append(entry, buildMatroskaElement(mkvIDCodecID, []byte("A_AC3"))...)
+	entry = append(entry, buildMatroskaElement(mkvIDContentEncodings, encoding)...)
+
+	stream, ok := parseMatroskaTrackEntry(entry, 0)
+	if !ok {
+		t.Fatalf("expected parsed stream")
+	}
+	if got := findField(stream.Fields, "Muxing mode"); got != "Header stripping" {
+		t.Fatalf("unexpected muxing mode: %q", got)
+	}
+	if !bytes.Equal(stream.mkvHeaderStripBytes, []byte{0x0B, 0x77}) {
+		t.Fatalf("unexpected header strip bytes: %#v", stream.mkvHeaderStripBytes)
+	}
+}
+
+func TestParseMatroskaTrackEntryNonHeaderCompression(t *testing.T) {
+	compression := buildMatroskaElement(mkvIDContentCompression,
+		append(
+			buildMatroskaElement(mkvIDContentCompAlgo, encodeMatroskaUint(0)),
+			buildMatroskaElement(mkvIDContentCompSettings, []byte{0x01})...,
+		),
+	)
+	encoding := buildMatroskaElement(mkvIDContentEncoding, compression)
+	entry := append(
+		buildMatroskaElement(mkvIDTrackType, encodeMatroskaUint(2)),
+		buildMatroskaElement(mkvIDTrackNumber, encodeMatroskaUint(1))...,
+	)
+	entry = append(entry, buildMatroskaElement(mkvIDCodecID, []byte("A_AC3"))...)
+	entry = append(entry, buildMatroskaElement(mkvIDContentEncodings, encoding)...)
+
+	stream, ok := parseMatroskaTrackEntry(entry, 0)
+	if !ok {
+		t.Fatalf("expected parsed stream")
+	}
+	if got := findField(stream.Fields, "Muxing mode"); got != "" {
+		t.Fatalf("unexpected muxing mode: %q", got)
+	}
+	if len(stream.mkvHeaderStripBytes) != 0 {
+		t.Fatalf("unexpected header strip bytes: %#v", stream.mkvHeaderStripBytes)
 	}
 }
 

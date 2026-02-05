@@ -25,6 +25,7 @@ type Stream struct {
 	JSONSkipComputed    bool
 	eac3Dec3            eac3Dec3Info
 	nalLengthSize       int
+	mkvHeaderStripBytes []byte
 }
 
 type Report struct {

@@ -13,91 +13,97 @@ import (
 )
 
 const (
-	mkvIDEBML              = 0x1A45DFA3
-	mkvIDSegment           = 0x18538067
-	mkvIDInfo              = 0x1549A966
-	mkvIDCluster           = 0x1F43B675
-	mkvIDSeekHead          = 0x114D9B74
-	mkvIDSeek              = 0x4DBB
-	mkvIDSeekID            = 0x53AB
-	mkvIDSeekPosition      = 0x53AC
-	mkvIDSegmentUID        = 0x73A4
-	mkvIDTimecodeScale     = 0x2AD7B1
-	mkvIDDuration          = 0x4489
-	mkvIDMuxingApp         = 0x4D80
-	mkvIDWritingApp        = 0x5741
-	mkvIDErrorDetection    = 0x6BAA
-	mkvIDTracks            = 0x1654AE6B
-	mkvIDTags              = 0x1254C367
-	mkvIDChapters          = 0x1043A770
-	mkvIDTag               = 0x7373
-	mkvIDTagTargets        = 0x63C0
-	mkvIDSimpleTag         = 0x67C8
-	mkvIDTagName           = 0x45A3
-	mkvIDTagString         = 0x4487
-	mkvIDTagTrackUID       = 0x63C5
-	mkvIDEditionEntry      = 0x45B9
-	mkvIDChapterAtom       = 0xB6
-	mkvIDChapterTimeStart  = 0x91
-	mkvIDChapterDisplay    = 0x80
-	mkvIDChapString        = 0x85
-	mkvIDChapLanguage      = 0x437C
-	mkvIDTrackEntry        = 0xAE
-	mkvIDTrackNumber       = 0xD7
-	mkvIDTrackUID          = 0x73C5
-	mkvIDTrackType         = 0x83
-	mkvIDTrackName         = 0x536E
-	mkvIDTrackLanguage     = 0x22B59C
-	mkvIDTrackLanguageIETF = 0x22B59D
-	mkvIDTrackOffset       = 0x537F
-	mkvIDCodecID           = 0x86
-	mkvIDCodecPrivate      = 0x63A2
-	mkvIDCodecName         = 0x258688
-	mkvIDDefaultDuration   = 0x23E383
-	mkvIDFlagDefault       = 0x88
-	mkvIDFlagForced        = 0x55AA
-	mkvIDTrackVideo        = 0xE0
-	mkvIDTrackAudio        = 0xE1
-	mkvIDBitRate           = 0x6264
-	mkvIDPixelWidth        = 0xB0
-	mkvIDPixelHeight       = 0xBA
-	mkvIDDisplayWidth      = 0x54B0
-	mkvIDDisplayHeight     = 0x54BA
-	mkvIDDisplayUnit       = 0x54B2
-	mkvIDAspectRatioType   = 0x54B3
-	mkvIDPixelCropTop      = 0x54AA
-	mkvIDPixelCropBottom   = 0x54BB
-	mkvIDPixelCropLeft     = 0x54CC
-	mkvIDPixelCropRight    = 0x54DD
-	mkvIDColour            = 0x55B0
-	mkvIDMasteringMetadata = 0x55D0
-	mkvIDMasteringPrimRx   = 0x55D1
-	mkvIDMasteringPrimRy   = 0x55D2
-	mkvIDMasteringPrimGx   = 0x55D3
-	mkvIDMasteringPrimGy   = 0x55D4
-	mkvIDMasteringPrimBx   = 0x55D5
-	mkvIDMasteringPrimBy   = 0x55D6
-	mkvIDMasteringWhiteX   = 0x55D7
-	mkvIDMasteringWhiteY   = 0x55D8
-	mkvIDMasteringLumMax   = 0x55D9
-	mkvIDMasteringLumMin   = 0x55DA
-	mkvIDMaxCLL            = 0x55BC
-	mkvIDMaxFALL           = 0x55BD
-	mkvIDRange             = 0x55B9
-	mkvIDColourPrimaries   = 0x55BB
-	mkvIDTransferChar      = 0x55BA
-	mkvIDMatrixCoeffs      = 0x55B3
-	mkvIDSamplingRate      = 0xB5
-	mkvIDChannels          = 0x9F
-	mkvIDDocType           = 0x4282
-	mkvIDDocTypeVersion    = 0x4287
-	mkvIDTimecode          = 0xE7
-	mkvIDSimpleBlock       = 0xA3
-	mkvIDBlockGroup        = 0xA0
-	mkvIDBlock             = 0xA1
-	mkvIDBlockDuration     = 0x9B
-	mkvIDCRC32             = 0xBF
-	mkvMaxScan             = int64(4 << 20)
+	mkvIDEBML                = 0x1A45DFA3
+	mkvIDSegment             = 0x18538067
+	mkvIDInfo                = 0x1549A966
+	mkvIDCluster             = 0x1F43B675
+	mkvIDSeekHead            = 0x114D9B74
+	mkvIDSeek                = 0x4DBB
+	mkvIDSeekID              = 0x53AB
+	mkvIDSeekPosition        = 0x53AC
+	mkvIDSegmentUID          = 0x73A4
+	mkvIDTimecodeScale       = 0x2AD7B1
+	mkvIDDuration            = 0x4489
+	mkvIDMuxingApp           = 0x4D80
+	mkvIDWritingApp          = 0x5741
+	mkvIDErrorDetection      = 0x6BAA
+	mkvIDTracks              = 0x1654AE6B
+	mkvIDTags                = 0x1254C367
+	mkvIDChapters            = 0x1043A770
+	mkvIDTag                 = 0x7373
+	mkvIDTagTargets          = 0x63C0
+	mkvIDSimpleTag           = 0x67C8
+	mkvIDTagName             = 0x45A3
+	mkvIDTagString           = 0x4487
+	mkvIDTagTrackUID         = 0x63C5
+	mkvIDEditionEntry        = 0x45B9
+	mkvIDChapterAtom         = 0xB6
+	mkvIDChapterTimeStart    = 0x91
+	mkvIDChapterDisplay      = 0x80
+	mkvIDChapString          = 0x85
+	mkvIDChapLanguage        = 0x437C
+	mkvIDTrackEntry          = 0xAE
+	mkvIDTrackNumber         = 0xD7
+	mkvIDTrackUID            = 0x73C5
+	mkvIDTrackType           = 0x83
+	mkvIDTrackName           = 0x536E
+	mkvIDTrackLanguage       = 0x22B59C
+	mkvIDTrackLanguageIETF   = 0x22B59D
+	mkvIDTrackOffset         = 0x537F
+	mkvIDCodecID             = 0x86
+	mkvIDCodecPrivate        = 0x63A2
+	mkvIDCodecName           = 0x258688
+	mkvIDContentEncodings    = 0x6D80
+	mkvIDContentEncoding     = 0x6240
+	mkvIDContentEncodingType = 0x5033
+	mkvIDContentCompression  = 0x5034
+	mkvIDContentCompAlgo     = 0x4254
+	mkvIDContentCompSettings = 0x4255
+	mkvIDDefaultDuration     = 0x23E383
+	mkvIDFlagDefault         = 0x88
+	mkvIDFlagForced          = 0x55AA
+	mkvIDTrackVideo          = 0xE0
+	mkvIDTrackAudio          = 0xE1
+	mkvIDBitRate             = 0x6264
+	mkvIDPixelWidth          = 0xB0
+	mkvIDPixelHeight         = 0xBA
+	mkvIDDisplayWidth        = 0x54B0
+	mkvIDDisplayHeight       = 0x54BA
+	mkvIDDisplayUnit         = 0x54B2
+	mkvIDAspectRatioType     = 0x54B3
+	mkvIDPixelCropTop        = 0x54AA
+	mkvIDPixelCropBottom     = 0x54BB
+	mkvIDPixelCropLeft       = 0x54CC
+	mkvIDPixelCropRight      = 0x54DD
+	mkvIDColour              = 0x55B0
+	mkvIDMasteringMetadata   = 0x55D0
+	mkvIDMasteringPrimRx     = 0x55D1
+	mkvIDMasteringPrimRy     = 0x55D2
+	mkvIDMasteringPrimGx     = 0x55D3
+	mkvIDMasteringPrimGy     = 0x55D4
+	mkvIDMasteringPrimBx     = 0x55D5
+	mkvIDMasteringPrimBy     = 0x55D6
+	mkvIDMasteringWhiteX     = 0x55D7
+	mkvIDMasteringWhiteY     = 0x55D8
+	mkvIDMasteringLumMax     = 0x55D9
+	mkvIDMasteringLumMin     = 0x55DA
+	mkvIDMaxCLL              = 0x55BC
+	mkvIDMaxFALL             = 0x55BD
+	mkvIDRange               = 0x55B9
+	mkvIDColourPrimaries     = 0x55BB
+	mkvIDTransferChar        = 0x55BA
+	mkvIDMatrixCoeffs        = 0x55B3
+	mkvIDSamplingRate        = 0xB5
+	mkvIDChannels            = 0x9F
+	mkvIDDocType             = 0x4282
+	mkvIDDocTypeVersion      = 0x4287
+	mkvIDTimecode            = 0xE7
+	mkvIDSimpleBlock         = 0xA3
+	mkvIDBlockGroup          = 0xA0
+	mkvIDBlock               = 0xA1
+	mkvIDBlockDuration       = 0x9B
+	mkvIDCRC32               = 0xBF
+	mkvMaxScan               = int64(4 << 20)
 )
 
 const matroskaEAC3QuickProbeFrames = 1113
@@ -202,7 +208,10 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 					if format != "AC-3" && format != "E-AC-3" {
 						continue
 					}
-					probe := &matroskaAudioProbe{format: format}
+					probe := &matroskaAudioProbe{
+						format:      format,
+						headerStrip: stream.mkvHeaderStripBytes,
+					}
 					if format == "E-AC-3" {
 						probe.parseJOC = !stream.eac3Dec3.parsed || stream.eac3Dec3.hasJOC || stream.eac3Dec3.hasJOCComplex
 						if stream.eac3Dec3.hasJOCComplex {
@@ -225,6 +234,7 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 						videoProbes[id] = &matroskaVideoProbe{
 							codec:         format,
 							nalLengthSize: stream.nalLengthSize,
+							headerStrip:   stream.mkvHeaderStripBytes,
 						}
 					}
 				case StreamGeneral, StreamText, StreamImage, StreamMenu:
@@ -803,6 +813,8 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	var flagForced *bool
 	var nalLengthSize int
 	var hdrFormat string
+	var contentCompAlgo uint64
+	var contentCompSettings []byte
 	for pos < len(buf) {
 		id, idLen, ok := readVintID(buf, pos)
 		if !ok {
@@ -849,6 +861,13 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		}
 		if id == mkvIDCodecName {
 			codecName = string(buf[dataStart:dataEnd])
+		}
+		if id == mkvIDContentEncodings {
+			algo, settings, ok := parseMatroskaTrackCompression(buf[dataStart:dataEnd])
+			if ok {
+				contentCompAlgo = algo
+				contentCompSettings = settings
+			}
 		}
 		if id == mkvIDFlagDefault {
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
@@ -927,6 +946,9 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	}
 	if codecID != "" {
 		fields = append(fields, Field{Name: "Codec ID", Value: codecID})
+	}
+	if contentCompAlgo == 3 {
+		fields = insertFieldBefore(fields, Field{Name: "Muxing mode", Value: "Header stripping"}, "Codec ID")
 	}
 	if codecID == "S_TEXT/UTF8" {
 		fields = append(fields, Field{Name: "Codec ID/Info", Value: "UTF-8 Plain Text"})
@@ -1254,7 +1276,121 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		}
 		jsonExtras["Duration"] = fmt.Sprintf("%.9f", durationSeconds)
 	}
-	return Stream{Kind: kind, Fields: fields, JSON: jsonExtras, eac3Dec3: dec3Info, nalLengthSize: nalLengthSize}, true
+	headerStrip := []byte(nil)
+	if contentCompAlgo == 3 && len(contentCompSettings) > 0 {
+		headerStrip = append(headerStrip, contentCompSettings...)
+	}
+	return Stream{
+		Kind:                kind,
+		Fields:              fields,
+		JSON:                jsonExtras,
+		eac3Dec3:            dec3Info,
+		nalLengthSize:       nalLengthSize,
+		mkvHeaderStripBytes: headerStrip,
+	}, true
+}
+
+func parseMatroskaTrackCompression(buf []byte) (uint64, []byte, bool) {
+	pos := 0
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		if id == mkvIDContentEncoding {
+			if algo, settings, ok := parseMatroskaContentEncoding(buf[dataStart:dataEnd]); ok {
+				return algo, settings, true
+			}
+		}
+		pos = dataEnd
+	}
+	return 0, nil, false
+}
+
+func parseMatroskaContentEncoding(buf []byte) (uint64, []byte, bool) {
+	pos := 0
+	var encodingType uint64
+	var compAlgo uint64
+	var compSettings []byte
+	hasCompression := false
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		switch id {
+		case mkvIDContentEncodingType:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				encodingType = value
+			}
+		case mkvIDContentCompression:
+			algo, settings, ok := parseMatroskaContentCompression(buf[dataStart:dataEnd])
+			if ok {
+				compAlgo = algo
+				compSettings = settings
+				hasCompression = true
+			}
+		}
+		pos = dataEnd
+	}
+	if encodingType != 0 || !hasCompression {
+		return 0, nil, false
+	}
+	return compAlgo, compSettings, true
+}
+
+func parseMatroskaContentCompression(buf []byte) (uint64, []byte, bool) {
+	pos := 0
+	var compAlgo uint64
+	var compSettings []byte
+	hasAlgo := false
+	for pos < len(buf) {
+		id, idLen, ok := readVintID(buf, pos)
+		if !ok {
+			break
+		}
+		size, sizeLen, ok := readVintSize(buf, pos+idLen)
+		if !ok {
+			break
+		}
+		dataStart := pos + idLen + sizeLen
+		dataEnd := dataStart + int(size)
+		if size == unknownVintSize || dataEnd > len(buf) {
+			dataEnd = len(buf)
+		}
+		switch id {
+		case mkvIDContentCompAlgo:
+			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
+				compAlgo = value
+				hasAlgo = true
+			}
+		case mkvIDContentCompSettings:
+			compSettings = append(compSettings[:0], buf[dataStart:dataEnd]...)
+		}
+		pos = dataEnd
+	}
+	if !hasAlgo {
+		return 0, nil, false
+	}
+	return compAlgo, compSettings, true
 }
 
 type matroskaVideoInfo struct {

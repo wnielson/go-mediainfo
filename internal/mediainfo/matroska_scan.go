@@ -41,12 +41,14 @@ type matroskaAudioProbe struct {
 	targetPackets int
 	packetCount   int
 	parseJOC      bool
+	headerStrip   []byte
 }
 
 type matroskaVideoProbe struct {
 	codec         string
 	nalLengthSize int
 	hdrInfo       hevcHDRInfo
+	headerStrip   []byte
 }
 
 const matroskaVideoProbeMaxBytes = 256 * 1024
@@ -540,10 +542,12 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 					return 0, 0, 0, 0, err
 				}
 				if needAudio {
-					probeMatroskaAudio(audioProbes, trackVal, payload, 1)
+					audioPayload := applyMatroskaAudioHeaderStrip(payload, audioProbe)
+					probeMatroskaAudio(audioProbes, trackVal, audioPayload, 1)
 				}
 				if needVideo {
-					probeMatroskaVideo(videoProbes, trackVal, payload)
+					videoPayload := applyMatroskaVideoHeaderStrip(payload, videoProbe)
+					probeMatroskaVideo(videoProbes, trackVal, videoPayload)
 				}
 				if size > peek {
 					if err := er.skip(size - peek); err != nil {
@@ -571,6 +575,34 @@ func videoProbeNeedsSample(probe *matroskaVideoProbe) bool {
 		return false
 	}
 	return !probe.hdrInfo.complete()
+}
+
+func applyMatroskaAudioHeaderStrip(payload []byte, probe *matroskaAudioProbe) []byte {
+	if probe == nil {
+		return payload
+	}
+	prefix := probe.headerStrip
+	if len(prefix) == 0 || len(payload) == 0 {
+		return payload
+	}
+	combined := make([]byte, len(prefix)+len(payload))
+	copy(combined, prefix)
+	copy(combined[len(prefix):], payload)
+	return combined
+}
+
+func applyMatroskaVideoHeaderStrip(payload []byte, probe *matroskaVideoProbe) []byte {
+	if probe == nil {
+		return payload
+	}
+	prefix := probe.headerStrip
+	if len(prefix) == 0 || len(payload) == 0 {
+		return payload
+	}
+	combined := make([]byte, len(prefix)+len(payload))
+	copy(combined, prefix)
+	copy(combined[len(prefix):], payload)
+	return combined
 }
 
 func statsForTrack(stats map[uint64]*matroskaTrackStats, track uint64) *matroskaTrackStats {
