@@ -1,40 +1,24 @@
 # Samples
 
-These files are used for parity/testing.
+Goal: small, redistributable fixtures for parity/tests.
 
-## Provenance
+## Provenance / License
 
-Current provenance is **unknown** (not recorded at time of download).
+Generated locally with `ffmpeg` using synthetic sources:
+- video: `testsrc2`
+- audio: `sine`
 
-Git history shows the files were added on **Feb 3, 2026**:
-- `samples/sample.mp4` (commit `2066589`)
-- `samples/sample.mkv` (commit `2066589`)
-- `samples/sample.ts` (commit `2066589`)
-- `samples/sample.avi` (commit `767c6f4`)
-- `samples/sample.mpg` (commit `2d81f29`)
-- `samples/sample.vob` (commit `2d81f29`)
-- `samples/sample_ac3.vob` (commit `f3a660f`)
+No third-party media content. Treat as CC0 (project-generated fixtures).
 
-Possible sources mentioned later (not confirmed):
-- `filesamples.com`
-- `getsamplefiles.com`
+Regen script: `samples/generate.sh`.
 
 ## Hashes (sha256)
 
-- `sample.avi` (583572 bytes): `e8cc4db9312505c3a10bedf528450db177f9c174d2f361511c3b24a2be45cc5a`
-- `sample.mkv` (282556 bytes): `2ac02e78d4cdfc35d315fd65807e601466fac06c1c4fe4e7496046d0091b3bbd`
-- `sample.mp4` (284972 bytes): `791212f72f3ecbaa90a93fd084b3adba023f313e54451a2997053fd2d4a44211`
-- `sample.mpg` (548754 bytes): `ec23cd413881cf2122905f4334e5adaf06aba1f333ea982143acb7e0d7748571`
-- `sample.ts` (320352 bytes): `3e6fd11a5cdb93ed61eac35cdc580d62717c6f02c5cb57378d88d61e613e2ee1`
-- `sample.vob` (559104 bytes): `c00fddeba7ff70a8ab284ce8becb9ff60811d052af3f3ae32c281e84f5e372ab`
-- `sample_ac3.vob` (3821568 bytes): `8c767fb7dc7904552110f125d32653db79ff732deed33d9c4ea3e705faf290f9`
+- `sample.mp4` (277741 bytes): `da6e989dfd7d61d0d83e9cecb8750442ec75443c8d4f8cf4a7277ab8b73096fa`
+- `sample.mkv` (275012 bytes): `d480e367b552749dc15f4994e4a64746166eb1c927c2edabca964c7614f28e2b`
+- `sample.ts` (312080 bytes): `b22d74c12b54b4046b9ece96dc7745768137e5e1bf938890cc142fb4128a9872`
+- `sample.avi` (1012854 bytes): `664f1202f1e110f09ffbbc8a3b288638e44da75965f9dabfe0e94ef797b2e6c5`
+- `sample.mpg` (711112 bytes): `0e6670b9ca9b775b0140335825aaba18d2e98847389954d16539b754dca3bbd5`
+- `sample.vob` (1228800 bytes): `cc66cbce837ebcb26aec7ea56f31f70fa7efdecfe9b30fa6ec9acd89d2551117`
+- `sample_ac3.vob` (1228800 bytes): `e8d0b94387c9751c6fe994d536e5e6ba85e6018ccfa857e33bf407a2301c87a7`
 
-## Quick Checks (unverified match)
-
-- `getsamplefiles.com` MKV samples are tens of MB (e.g., ~29-85 MB), so unlikely match for our ~0.28 MB `sample.mkv`.
-- `filesamples.com` smallest MP4/MKV/AVI/TS samples listed are ~0.53-0.63 MB, so also unlikely matches for our ~0.28-0.56 MB set.
-
-## TODO
-
-- Confirm original source + license/redistribution permission for each file.
-- If unclear: replace with samples from a known-redistributable source or generate our own minimal fixtures.
