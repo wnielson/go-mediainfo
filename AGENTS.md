@@ -23,7 +23,7 @@ Owner: soup
 - DVD JSON: Language uses ISO-639 code (e.g., `en`), text uses full name (e.g., English)
 - DVD JSON: Menu order is Duration, Delay, FrameRate, FrameRate_Num, FrameRate_Den, FrameCount, extra
 - DVD JSON: SamplingCount present for audio; PixelAspectRatio present for video even when computed fields skipped
-- JSON: FileExtension preserves filename case; do not emit File_Created_Date/Local (CLI omits)
+- JSON: FileExtension preserves filename case; emit File_Created_Date/Local (CLI includes)
 - DVD aggregate (VTS_XX_0.IFO): parse title-set VOBs via streaming MPEG-PS; file size = sum VTS_XX_1..n + IFO (exclude VTS_XX_0.VOB)
 - DVD aggregate JSON: add AC-3 *_String extras + dialnorm_Count; add Source in stream extra
 - DVD IFO/BUP: audio/subpic counts are 16-bit; subpic attrs are 6 bytes, audio attrs 8 bytes
@@ -161,6 +161,7 @@ Owner: soup
 - ParseSpeed default is 0.5; ParseSpeed>=1 enables full E-AC-3 probe, <1 limits compr stats sample (target 1113 frames)
 - Matroska E-AC-3: parse laced frames per-frame for probe stats
 - E-AC-3 compr field uses 0xFF mapping (ac3ComprDB(0xFF)) even when stats exclude 0xFF
+- CLI: cobra wrapper with ASCII banner; no-args shows cobra help, flags passthrough to internal CLI
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

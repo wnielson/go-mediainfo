@@ -3,19 +3,20 @@
 ## Parity (1:1 MediaInfo CLI)
 - Goal: 1:1 MediaInfo CLI parity (fields + values + ordering) across text/JSON/XML/CSV
 - Expand format coverage + field parity across CLI outputs
-- Sample parity complete: MP4/MKV/TS/AVI/MPEG-PS (VOB)/MPEG Video (MPG) (text output)
+- Sample parity complete: MP4/MKV/TS/AVI/MPEG Video (MPG) (text output)
 - Next targets: sample sweep (PS/TS edge cases), parity audit for JSON/XML/CSV
 - Remaining diffs: broader sample sweep for edge cases
 - CSV parity: sample set now matches upstream (section headers, raw values, spacing, numbering)
 - Implement MediaInfo JSON/XML/CSV schema parity (raw field names/values, missing fields, exact formatting) where still missing
-- JSON parity: sample set complete (MP4/MKV/TS/AVI/MPEG Video/VOB)
-- MPEG-PS/VOB JSON: expand VOB parity sweep beyond samples (sample.vob + sample_ac3.vob match)
+- JSON parity: sample set complete (MP4/MKV/TS/AVI/MPEG Video)
+- MPEG-PS/VOB JSON: VTS_02_1.VOB small diffs (General Duration/OverallBitRate, Video BitRate rounding, AC-3 extra stats, field order for MuxingMode/Delay_Source)
+- MPEG-PS/VOB JSON: recheck sample_ac3.vob after AC-3 duration tweak (+1 frame)
 - MPEG-PS/VOB: verify RLE subtitle Delay/Duration (first/last PTS) on more DVD samples
 - MKV (The.Rookie... WEB-DL) parity complete across text/JSON/XML/CSV
 - DVD: verify EIA-608 timing on more samples (Ask.Me.to.Dance IFO matched)
 - DVD: verify CC frames-before-first-event count vs MediaInfo (currently derived from MPEG-2 picture count)
 - DVD: run full directory parity on large DVD sets (long-running scan)
-- DVD VOB/IFO: MPEG-PS video duration/bitrate/stream size still mismatching on VTS_02_1.VOB and VTS_02_0.IFO (upstream video Duration 83 ms, Stream size ~254 KiB, Bit rate 31.2 Mb/s)
+- DVD VOB/IFO: VTS_01_0.VOB audio stream detected as AAC instead of PCM; video duration/bitrate mismatch
 - DVD IFO: menu output should include multiple Menu # entries (per PGC); we currently emit a single Menu
 - DVD IFO: AC-3 dialnorm/compr/dynrng stat counts differ from upstream on VTS_02_0.IFO (likely sample/PTS handling)
 
