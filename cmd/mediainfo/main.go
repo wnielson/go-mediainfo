@@ -67,6 +67,7 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
+	cli.SetVersion(version)
 	rootCmd.SetOut(os.Stdout)
 	rootCmd.SetErr(os.Stderr)
 	rootCmd.SetHelpTemplate(helpTemplate)
