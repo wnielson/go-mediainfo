@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/blang/semver"
 	"github.com/creativeprojects/go-selfupdate"
@@ -38,13 +37,6 @@ var rootCmd = &cobra.Command{
 	SilenceUsage:       true,
 	SilenceErrors:      true,
 	Run: func(cmd *cobra.Command, args []string) {
-		if hasUpdateFlag(args) {
-			if err := runSelfUpdate(cmd.Context()); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "mediainfo: %s\n", err.Error())
-				os.Exit(1)
-			}
-			return
-		}
 		if len(args) == 0 {
 			_ = cmd.Help()
 			return
@@ -66,9 +58,9 @@ var updateCmd = &cobra.Command{
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print version information",
+	Short: "Print MediaInfo version information",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Fprintf(cmd.OutOrStdout(), "mediainfo version: %s\n", version)
+		cli.Version(cmd.OutOrStdout())
 		return nil
 	},
 	DisableFlagsInUseLine: true,
@@ -87,24 +79,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-}
-
-func hasUpdateFlag(args []string) bool {
-	for _, arg := range args {
-		n := normalizeArgName(arg)
-		if n == "--self-update" || n == "--update" {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeArgName(arg string) string {
-	eq := strings.IndexByte(arg, '=')
-	if eq == -1 {
-		eq = len(arg)
-	}
-	return strings.ToLower(arg[:eq])
 }
 
 func runSelfUpdate(ctx context.Context) error {

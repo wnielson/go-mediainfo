@@ -46,12 +46,11 @@ mediainfo /path/to/file
 ```
 
 ```sh
-mediainfo /path/to/file --Output=JSON
-mediainfo /path/to/file --Full
+mediainfo /path/to/file --output=JSON
+mediainfo /path/to/file --full
 mediainfo /path/to/dir
-mediainfo --Info-Parameters
-mediainfo --Info-CanHandleUrls
-mediainfo --Version
+mediainfo --info-parameters
+mediainfo --info-canhandleurls
 mediainfo update
 mediainfo version
 ```
@@ -62,17 +61,15 @@ Default output: text.
 
 ## Options
 
-- `-f, --Full` (complete report)
-- `--Output=...` (TEXT/JSON/XML/HTML/CSV/EBUCore/PBCore/Graph)
-- `--Language=...` (output language)
-- `--LogFile=...` (write output to a file)
-- `--BOM` (write UTF-8 BOM on Windows)
-- `--Help`, `--Help-Output`
-- `--Info-Parameters`, `--Info-CanHandleUrls`
-- `--Version`
-- `--self-update` / `--update` (update to latest release; release builds only)
+- `-f, --full` (complete report)
+- `--output=...` (TEXT/JSON/XML/OLDXML/HTML/CSV/EBUCore/EBUCore_JSON/PBCore/PBCore2/Graph_Svg/Graph_Dot)
+- `--language=...` (output language)
+- `--logfile=...` (write output to a file)
+- `--bom` (write UTF-8 BOM on Windows)
+- `--help`, `--help-output`
+- `--info-parameters`, `--info-canhandleurls`
 
 ## Commands
 
-- `update` (same as `--self-update`)
-- `version`
+- `update` (self-update this binary; release builds only)
+- `version` (print MediaInfo version)

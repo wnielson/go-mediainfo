@@ -79,9 +79,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			opts.LogFile = valueAfterLogfile(original)
 		case normalized == "--bom":
 			opts.Bom = true
-		case normalized == "--version":
-			Version(stdout)
-			return exitOK
 		case strings.HasPrefix(normalized, "--"):
 			if normalized == "--" {
 				continue

@@ -163,7 +163,8 @@ Owner: soup
 - E-AC-3 compr field uses 0xFF mapping (ac3ComprDB(0xFF)) even when stats exclude 0xFF
 - CLI: cobra wrapper with ASCII banner; no-args shows cobra help, flags passthrough to internal CLI
 - Release/CI: GoReleaser v2 + GitHub Actions CI (gofmt/vet/test/tidy), tag-triggered releases (v*)
-- Self-update: cobra `update` command + `--self-update/--update` flags (release builds only), uses go-selfupdate
+- Self-update: cobra `update` command (release builds only), uses go-selfupdate
+- UX: docs/help print lowercase flags; parser accepts options case-insensitively
 - Repo samples: generated fixtures (ffmpeg testsrc2+sine); see `samples/README.md` and `samples/generate.sh`
 
 ## Notes
