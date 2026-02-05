@@ -18,36 +18,49 @@ func ParseOgg(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool) {
 		dataBytes   uint64
 		format      string
 	)
+	var segTable [255]byte
 
 	for {
-		header := make([]byte, 27)
-		if _, err := io.ReadFull(file, header); err != nil {
+		var header [27]byte
+		if _, err := io.ReadFull(file, header[:]); err != nil {
 			break
 		}
-		if !bytes.HasPrefix(header, []byte("OggS")) {
+		if header[0] != 'O' || header[1] != 'g' || header[2] != 'g' || header[3] != 'S' {
 			return ContainerInfo{}, nil, false
 		}
 		granule := binary.LittleEndian.Uint64(header[6:14])
 		segCount := int(header[26])
-		segTable := make([]byte, segCount)
-		if _, err := io.ReadFull(file, segTable); err != nil {
+		if segCount > len(segTable) {
+			return ContainerInfo{}, nil, false
+		}
+		if _, err := io.ReadFull(file, segTable[:segCount]); err != nil {
 			return ContainerInfo{}, nil, false
 		}
 		dataLen := 0
-		for _, seg := range segTable {
+		for _, seg := range segTable[:segCount] {
 			dataLen += int(seg)
 		}
-		data := make([]byte, dataLen)
 		if dataLen > 0 {
-			if _, err := io.ReadFull(file, data); err != nil {
-				return ContainerInfo{}, nil, false
-			}
 			dataBytes += uint64(dataLen)
 			if sampleRate == 0 {
+				peek := min(dataLen, 64)
+				data := make([]byte, peek)
+				if _, err := io.ReadFull(file, data); err != nil {
+					return ContainerInfo{}, nil, false
+				}
 				if sr, ch, fmt := parseOggIdentification(data); sr > 0 {
 					sampleRate = sr
 					channels = ch
 					format = fmt
+				}
+				if dataLen > peek {
+					if _, err := file.Seek(int64(dataLen-peek), io.SeekCurrent); err != nil {
+						return ContainerInfo{}, nil, false
+					}
+				}
+			} else {
+				if _, err := file.Seek(int64(dataLen), io.SeekCurrent); err != nil {
+					return ContainerInfo{}, nil, false
 				}
 			}
 		}
