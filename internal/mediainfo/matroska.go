@@ -33,6 +33,7 @@ const (
 	mkvIDChapterTimeStart  = 0x91
 	mkvIDChapterDisplay    = 0x80
 	mkvIDChapString        = 0x85
+	mkvIDChapLanguage      = 0x437C
 	mkvIDTrackEntry        = 0xAE
 	mkvIDTrackNumber       = 0xD7
 	mkvIDTrackUID          = 0x73C5
@@ -122,38 +123,57 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 	if !ok {
 		return MatroskaInfo{}, false
 	}
+	if hdr := parseDolbyVisionConfigFromPrivate(buf); hdr != "" {
+		for i := range info.Tracks {
+			if info.Tracks[i].Kind == StreamVideo && findField(info.Tracks[i].Fields, "HDR format") == "" {
+				info.Tracks[i].Fields = insertFieldBefore(info.Tracks[i].Fields, Field{Name: "HDR format", Value: hdr}, "Codec ID")
+			}
+		}
+	}
 	if info.SegmentSize == 0 && info.SegmentOffset > 0 && size > info.SegmentOffset {
 		info.SegmentSize = size - info.SegmentOffset
 	}
 	if info.SegmentOffset > 0 && info.SegmentSize > 0 && info.TimecodeScale > 0 {
-		probes := map[uint64]*matroskaAudioProbe{}
+		audioProbes := map[uint64]*matroskaAudioProbe{}
+		videoProbes := map[uint64]*matroskaVideoProbe{}
 		for _, stream := range info.Tracks {
-			if stream.Kind != StreamAudio {
-				continue
-			}
-			format := findField(stream.Fields, "Format")
-			if format != "AC-3" && format != "E-AC-3" {
-				continue
-			}
 			if id := streamTrackNumber(stream); id > 0 {
-				probe := &matroskaAudioProbe{format: format}
-				if format == "E-AC-3" {
-					probe.collect = true
-					if opts.ParseSpeed < 1 {
-						probe.targetFrames = matroskaEAC3QuickProbeFrames
+				switch stream.Kind {
+				case StreamAudio:
+					format := findField(stream.Fields, "Format")
+					if format != "AC-3" && format != "E-AC-3" {
+						continue
 					}
+					probe := &matroskaAudioProbe{format: format}
+					if format == "E-AC-3" {
+						probe.collect = true
+						if opts.ParseSpeed < 1 {
+							probe.targetFrames = matroskaEAC3QuickProbeFrames
+						}
+					}
+					audioProbes[id] = probe
+				case StreamVideo:
+					format := findField(stream.Fields, "Format")
+					if format == "HEVC" && stream.nalLengthSize > 0 {
+						videoProbes[id] = &matroskaVideoProbe{
+							codec:         format,
+							nalLengthSize: stream.nalLengthSize,
+						}
+					}
+				case StreamGeneral, StreamText, StreamImage, StreamMenu:
+					continue
 				}
-				probes[id] = probe
 			}
 		}
 		applyStats := opts.ParseSpeed >= 1 || size > mkvMaxScan
-		needsScan := applyStats || len(probes) > 0
+		needsScan := applyStats || len(audioProbes) > 0 || len(videoProbes) > 0
 		if needsScan {
-			if stats, ok := scanMatroskaClusters(r, info.SegmentOffset, info.SegmentSize, info.TimecodeScale, probes); ok {
+			if stats, ok := scanMatroskaClusters(r, info.SegmentOffset, info.SegmentSize, info.TimecodeScale, audioProbes, videoProbes); ok {
 				if applyStats {
 					applyMatroskaStats(&info, stats, size)
 				}
-				applyMatroskaAudioProbes(&info, probes)
+				applyMatroskaAudioProbes(&info, audioProbes)
+				applyMatroskaVideoProbes(&info, videoProbes)
 			}
 		}
 	}
@@ -272,18 +292,13 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 				if name == "" {
 					name = fmt.Sprintf("Chapter %d", i+1)
 				}
+				if chapter.lang != "" {
+					name = chapter.lang + ":" + name
+				}
 				menu.Fields = append(menu.Fields, Field{Name: formatMatroskaChapterTimeMs(chapter.startMs), Value: name})
 			}
 			menu.JSONRaw["extra"] = renderMatroskaMenuExtra(chapters)
 			info.Tracks = append(info.Tracks, menu)
-			for i := range info.Tracks {
-				if info.Tracks[i].Kind == StreamVideo {
-					if findField(info.Tracks[i].Fields, "Time code of first frame") == "" {
-						info.Tracks[i].Fields = append(info.Tracks[i].Fields, Field{Name: "Time code of first frame", Value: "00:00:00;00"})
-					}
-					break
-				}
-			}
 		}
 	}
 	if info.Container.HasDuration() || len(info.Tracks) > 0 {
@@ -326,6 +341,7 @@ func parseMatroskaHeader(buf []byte) []Field {
 type matroskaChapter struct {
 	startMs int64
 	name    string
+	lang    string
 }
 
 func parseMatroskaChapters(buf []byte, timecodeScale uint64) []matroskaChapter {
@@ -405,8 +421,11 @@ func parseMatroskaChapterAtom(buf []byte) (matroskaChapter, bool) {
 				hasStart = true
 			}
 		case mkvIDChapterDisplay:
-			if name := parseMatroskaChapterDisplay(buf[dataStart:dataEnd]); name != "" {
+			if name, lang := parseMatroskaChapterDisplay(buf[dataStart:dataEnd]); name != "" {
 				chapter.name = name
+				if chapter.lang == "" {
+					chapter.lang = lang
+				}
 			}
 		}
 		pos = dataEnd
@@ -417,8 +436,10 @@ func parseMatroskaChapterAtom(buf []byte) (matroskaChapter, bool) {
 	return matroskaChapter{}, false
 }
 
-func parseMatroskaChapterDisplay(buf []byte) string {
+func parseMatroskaChapterDisplay(buf []byte) (string, string) {
 	pos := 0
+	var name string
+	var lang string
 	for pos < len(buf) {
 		id, idLen, ok := readVintID(buf, pos)
 		if !ok {
@@ -433,12 +454,15 @@ func parseMatroskaChapterDisplay(buf []byte) string {
 		if size == unknownVintSize || dataEnd > len(buf) {
 			dataEnd = len(buf)
 		}
-		if id == mkvIDChapString {
-			return strings.TrimRight(string(buf[dataStart:dataEnd]), "\x00")
+		switch id {
+		case mkvIDChapString:
+			name = strings.TrimRight(string(buf[dataStart:dataEnd]), "\x00")
+		case mkvIDChapLanguage:
+			lang = normalizeLanguageCode(strings.TrimSpace(string(buf[dataStart:dataEnd])))
 		}
 		pos = dataEnd
 	}
-	return ""
+	return name, lang
 }
 
 func formatMatroskaChapterTimeMs(msTotal int64) string {
@@ -593,6 +617,8 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	var trackBitRate bool
 	var flagDefault *bool
 	var flagForced *bool
+	var nalLengthSize int
+	var hdrFormat string
 	for pos < len(buf) {
 		id, idLen, ok := readVintID(buf, pos)
 		if !ok {
@@ -686,8 +712,9 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		}
 		pos = dataEnd
 	}
-	if trackLanguageIETF != "" {
-		trackLanguage = trackLanguageIETF
+	displayLanguage := trackLanguage
+	if displayLanguage == "" {
+		displayLanguage = trackLanguageIETF
 	}
 	kind, format := mapMatroskaCodecID(codecID, trackType)
 	if kind == "" {
@@ -729,8 +756,17 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		spsInfo = avcInfo
 	}
 	if kind == StreamVideo && codecID == "V_MPEGH/ISO/HEVC" && len(codecPrivate) > 0 {
-		_, hevcFields, _ := parseHEVCConfig(codecPrivate)
+		_, hevcFields, hevcInfo := parseHEVCConfig(codecPrivate)
 		fields = append(fields, hevcFields...)
+		nalLengthSize = hevcInfo.nalLengthSize
+		if dv := parseDolbyVisionConfigFromPrivate(codecPrivate); dv != "" {
+			hdrFormat = dv
+		}
+		if hdrFormat == "" {
+			if dv := parseDolbyVisionConfigFromPrivate(buf); dv != "" {
+				hdrFormat = dv
+			}
+		}
 	}
 	if spsInfo.CodedWidth > 0 {
 		videoInfo.codedWidth = spsInfo.CodedWidth
@@ -841,6 +877,9 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		if videoInfo.maxFALL > 0 && findField(fields, "Maximum Frame-Average Light Level") == "" {
 			fields = append(fields, Field{Name: "Maximum Frame-Average Light Level", Value: fmt.Sprintf("%d cd/m2", videoInfo.maxFALL)})
 		}
+		if hdrFormat != "" && findField(fields, "HDR format") == "" {
+			fields = insertFieldBefore(fields, Field{Name: "HDR format", Value: hdrFormat}, "Codec ID")
+		}
 		if findField(fields, "Color space") == "" && (videoInfo.colorRange != "" || videoInfo.colorPrimaries != "" || videoInfo.transferCharacteristics != "" || videoInfo.matrixCoefficients != "") {
 			if matroskaHasStreamColor(videoInfo) {
 				fields = append(fields, Field{Name: "Color space", Value: "YUV"})
@@ -893,8 +932,11 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	} else {
 		fields = append(fields, Field{Name: "Forced", Value: "No"})
 	}
-	languageCode := normalizeLanguageCode(trackLanguage)
-	if language := formatLanguage(trackLanguage); language != "" {
+	languageCode := normalizeLanguageCode(trackLanguageIETF)
+	if languageCode == "" {
+		languageCode = normalizeLanguageCode(trackLanguage)
+	}
+	if language := formatLanguage(displayLanguage); language != "" {
 		fields = insertFieldBefore(fields, Field{Name: "Language", Value: language}, "Default")
 	}
 	if trackName != "" {
@@ -1022,7 +1064,7 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		}
 		jsonExtras["Duration"] = fmt.Sprintf("%.9f", durationSeconds)
 	}
-	return Stream{Kind: kind, Fields: fields, JSON: jsonExtras}, true
+	return Stream{Kind: kind, Fields: fields, JSON: jsonExtras, nalLengthSize: nalLengthSize}, true
 }
 
 type matroskaVideoInfo struct {

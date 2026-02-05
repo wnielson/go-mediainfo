@@ -44,7 +44,19 @@ func formatAspectRatio(width, height uint64) string {
 		return ""
 	}
 	g := gcd(width, height)
-	return fmt.Sprintf("%d:%d", width/g, height/g)
+	reducedW := width / g
+	reducedH := height / g
+	if reducedW <= 50 && reducedH <= 50 {
+		return fmt.Sprintf("%d:%d", reducedW, reducedH)
+	}
+	ratio := float64(width) / float64(height)
+	common := []float64{1.33, 1.37, 1.66, 1.78, 1.85, 2.00, 2.20, 2.40}
+	for _, target := range common {
+		if math.Abs(ratio-target) < 0.02 {
+			return fmt.Sprintf("%.2f:1", target)
+		}
+	}
+	return fmt.Sprintf("%.2f:1", ratio)
 }
 
 func gcd(a, b uint64) uint64 {

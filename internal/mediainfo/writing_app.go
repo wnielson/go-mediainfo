@@ -3,11 +3,7 @@ package mediainfo
 import "strings"
 
 func normalizeWritingApplication(raw string) string {
-	name, _, versionRaw := splitWritingApplication(raw)
-	if name == "mkvmerge" && strings.HasPrefix(versionRaw, "v") {
-		return name + " " + strings.TrimPrefix(versionRaw, "v")
-	}
-	return raw
+	return strings.TrimSpace(raw)
 }
 
 func splitWritingApplication(raw string) (string, string, string) {

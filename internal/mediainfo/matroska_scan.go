@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 )
 
 type matroskaTrackStats struct {
@@ -26,6 +27,14 @@ type matroskaAudioProbe struct {
 	collect      bool
 	targetFrames int
 }
+
+type matroskaVideoProbe struct {
+	codec         string
+	nalLengthSize int
+	hdrInfo       hevcHDRInfo
+}
+
+const matroskaVideoProbeMaxBytes = 256 * 1024
 
 func (s *matroskaTrackStats) addBlock(timeNs int64, dataBytes int64, durationNs int64, frames int64) {
 	if dataBytes > 0 {
@@ -157,7 +166,7 @@ func readMatroskaElementHeader(er *ebmlReader, size int64, start int64) (uint64,
 	return id, elemSize, nil
 }
 
-func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale uint64, probes map[uint64]*matroskaAudioProbe) (map[uint64]*matroskaTrackStats, bool) {
+func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale uint64, audioProbes map[uint64]*matroskaAudioProbe, videoProbes map[uint64]*matroskaVideoProbe) (map[uint64]*matroskaTrackStats, bool) {
 	if size <= 0 {
 		return nil, false
 	}
@@ -172,7 +181,7 @@ func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale
 		}
 		switch id {
 		case mkvIDCluster:
-			if err := scanMatroskaCluster(er, int64(elemSize), int64(timecodeScale), stats, probes); err != nil {
+			if err := scanMatroskaCluster(er, int64(elemSize), int64(timecodeScale), stats, audioProbes, videoProbes); err != nil {
 				return stats, len(stats) > 0
 			}
 		default:
@@ -184,7 +193,7 @@ func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale
 	return stats, len(stats) > 0
 }
 
-func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, probes map[uint64]*matroskaAudioProbe) error {
+func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, audioProbes map[uint64]*matroskaAudioProbe, videoProbes map[uint64]*matroskaVideoProbe) error {
 	start := er.pos
 	var clusterTimecode int64
 	for er.pos-start < size {
@@ -202,11 +211,11 @@ func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats 
 				clusterTimecode = int64(value)
 			}
 		case mkvIDSimpleBlock:
-			if err := scanMatroskaBlock(er, int64(elemSize), clusterTimecode, timecodeScale, stats, probes, 0); err != nil {
+			if err := scanMatroskaBlock(er, int64(elemSize), clusterTimecode, timecodeScale, stats, audioProbes, videoProbes, 0); err != nil {
 				return err
 			}
 		case mkvIDBlockGroup:
-			if err := scanMatroskaBlockGroup(er, int64(elemSize), clusterTimecode, timecodeScale, stats, probes); err != nil {
+			if err := scanMatroskaBlockGroup(er, int64(elemSize), clusterTimecode, timecodeScale, stats, audioProbes, videoProbes); err != nil {
 				return err
 			}
 		default:
@@ -218,7 +227,7 @@ func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats 
 	return nil
 }
 
-func scanMatroskaBlockGroup(er *ebmlReader, size int64, clusterTimecode int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, probes map[uint64]*matroskaAudioProbe) error {
+func scanMatroskaBlockGroup(er *ebmlReader, size int64, clusterTimecode int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, audioProbes map[uint64]*matroskaAudioProbe, videoProbes map[uint64]*matroskaVideoProbe) error {
 	start := er.pos
 	var blockTrack uint64
 	var blockTimecode int16
@@ -235,7 +244,7 @@ func scanMatroskaBlockGroup(er *ebmlReader, size int64, clusterTimecode int64, t
 		}
 		switch id {
 		case mkvIDBlock:
-			track, timecode, dataSize, frames, samples, err := readMatroskaBlockHeader(er, int64(elemSize), probes)
+			track, timecode, dataSize, frames, samples, err := readMatroskaBlockHeader(er, int64(elemSize), audioProbes, videoProbes)
 			if err != nil {
 				return err
 			}
@@ -265,14 +274,15 @@ func scanMatroskaBlockGroup(er *ebmlReader, size int64, clusterTimecode int64, t
 		absTime := (clusterTimecode + int64(blockTimecode)) * timecodeScale
 		statsForTrack(stats, blockTrack).addBlock(absTime, blockSize, durationNs, blockFrames)
 		for _, sample := range payloadSamples {
-			probeMatroskaAudio(probes, blockTrack, sample, 1)
+			probeMatroskaAudio(audioProbes, blockTrack, sample, 1)
+			probeMatroskaVideo(videoProbes, blockTrack, sample)
 		}
 	}
 	return nil
 }
 
-func scanMatroskaBlock(er *ebmlReader, size int64, clusterTimecode int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, probes map[uint64]*matroskaAudioProbe, durationUnits uint64) error {
-	track, timecode, dataSize, frames, samples, err := readMatroskaBlockHeader(er, size, probes)
+func scanMatroskaBlock(er *ebmlReader, size int64, clusterTimecode int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, audioProbes map[uint64]*matroskaAudioProbe, videoProbes map[uint64]*matroskaVideoProbe, durationUnits uint64) error {
+	track, timecode, dataSize, frames, samples, err := readMatroskaBlockHeader(er, size, audioProbes, videoProbes)
 	if err != nil {
 		return err
 	}
@@ -280,12 +290,13 @@ func scanMatroskaBlock(er *ebmlReader, size int64, clusterTimecode int64, timeco
 	absTime := (clusterTimecode + int64(timecode)) * timecodeScale
 	statsForTrack(stats, track).addBlock(absTime, dataSize, durationNs, frames)
 	for _, sample := range samples {
-		probeMatroskaAudio(probes, track, sample, 1)
+		probeMatroskaAudio(audioProbes, track, sample, 1)
+		probeMatroskaVideo(videoProbes, track, sample)
 	}
 	return nil
 }
 
-func readMatroskaBlockHeader(er *ebmlReader, size int64, probes map[uint64]*matroskaAudioProbe) (uint64, int16, int64, int64, [][]byte, error) {
+func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]*matroskaAudioProbe, videoProbes map[uint64]*matroskaVideoProbe) (uint64, int16, int64, int64, [][]byte, error) {
 	if size < 4 {
 		if err := er.skip(size); err != nil {
 			return 0, 0, 0, 0, nil, err
@@ -423,11 +434,19 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, probes map[uint64]*matr
 	}
 	var samples [][]byte
 	if dataSize > 0 {
-		if probe := probes[trackVal]; probe != nil && (!probe.ok || probe.collect) {
+		audioProbe := audioProbes[trackVal]
+		videoProbe := videoProbes[trackVal]
+		needAudio := audioProbe != nil && (!audioProbe.ok || audioProbe.collect)
+		needVideo := videoProbeNeedsSample(videoProbe)
+		if needAudio || needVideo {
 			samples = make([][]byte, 0, frameCount)
 			for i := int64(0); i < frameCount; i++ {
 				size := frameSizes[i]
-				peek := min(size, int64(256))
+				peek := int64(256)
+				if needVideo {
+					peek = int64(matroskaVideoProbeMaxBytes)
+				}
+				peek = min(size, peek)
 				payload, err := er.readN(peek)
 				if err != nil {
 					return 0, 0, 0, 0, nil, err
@@ -446,6 +465,13 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, probes map[uint64]*matr
 		}
 	}
 	return trackVal, timecode, dataSize, frameCount, samples, nil
+}
+
+func videoProbeNeedsSample(probe *matroskaVideoProbe) bool {
+	if probe == nil {
+		return false
+	}
+	return !probe.hdrInfo.complete()
 }
 
 func statsForTrack(stats map[uint64]*matroskaTrackStats, track uint64) *matroskaTrackStats {
@@ -681,6 +707,55 @@ func applyMatroskaAudioProbes(info *MatroskaInfo, probes map[uint64]*matroskaAud
 	}
 }
 
+func applyMatroskaVideoProbes(info *MatroskaInfo, probes map[uint64]*matroskaVideoProbe) {
+	if len(probes) == 0 {
+		return
+	}
+	for i := range info.Tracks {
+		stream := &info.Tracks[i]
+		if stream.Kind != StreamVideo {
+			continue
+		}
+		trackID := streamTrackNumber(*stream)
+		probe := probes[trackID]
+		if probe == nil {
+			continue
+		}
+		hdr := probe.hdrInfo
+		if hdr.masteringPrimaries != "" {
+			stream.Fields = setFieldValue(stream.Fields, "Mastering display color primaries", hdr.masteringPrimaries)
+		}
+		if hdr.masteringLuminanceMin > 0 && hdr.masteringLuminanceMax > 0 {
+			stream.Fields = setFieldValue(stream.Fields, "Mastering display luminance", formatMasteringLuminance(hdr.masteringLuminanceMin, hdr.masteringLuminanceMax))
+		}
+		if hdr.maxCLL > 0 {
+			stream.Fields = setFieldValue(stream.Fields, "Maximum Content Light Level", fmt.Sprintf("%d cd/m2", hdr.maxCLL))
+		}
+		if hdr.maxFALL > 0 {
+			stream.Fields = setFieldValue(stream.Fields, "Maximum Frame-Average Light Level", fmt.Sprintf("%d cd/m2", hdr.maxFALL))
+		}
+		if hdr.hdr10Plus {
+			stream.Fields = mergeHDRFormatField(stream.Fields, formatHDR10Plus(hdr))
+		}
+		hasHDR := hdr.masteringPrimaries != "" || hdr.maxCLL > 0 || hdr.hdr10Plus
+		if hdr.masteringPrimaries != "" && findField(stream.Fields, "Color primaries") == "" {
+			stream.Fields = setFieldValue(stream.Fields, "Color primaries", hdr.masteringPrimaries)
+		}
+		if hasHDR && findField(stream.Fields, "Transfer characteristics") == "" {
+			stream.Fields = setFieldValue(stream.Fields, "Transfer characteristics", "PQ")
+		}
+		if hdr.masteringPrimaries == "BT.2020" && findField(stream.Fields, "Matrix coefficients") == "" {
+			stream.Fields = setFieldValue(stream.Fields, "Matrix coefficients", "BT.2020 non-constant")
+		}
+		if hasHDR && findField(stream.Fields, "Color range") == "" {
+			stream.Fields = setFieldValue(stream.Fields, "Color range", "Limited")
+		}
+		if findField(stream.Fields, "Color space") == "" && (findField(stream.Fields, "Color range") != "" || findField(stream.Fields, "Color primaries") != "" || findField(stream.Fields, "Transfer characteristics") != "" || findField(stream.Fields, "Matrix coefficients") != "") {
+			stream.Fields = setFieldValue(stream.Fields, "Color space", "YUV")
+		}
+	}
+}
+
 func parseInt(value string) (int64, bool) {
 	if value == "" {
 		return 0, false
@@ -772,6 +847,33 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 			}
 		}
 	}
+}
+
+func probeMatroskaVideo(probes map[uint64]*matroskaVideoProbe, track uint64, payload []byte) {
+	if len(payload) == 0 || probes == nil {
+		return
+	}
+	probe := probes[track]
+	if probe == nil || !videoProbeNeedsSample(probe) {
+		return
+	}
+	if probe.codec == "HEVC" {
+		parseHEVCSampleHDR(payload, probe.nalLengthSize, &probe.hdrInfo)
+	}
+}
+
+func mergeHDRFormatField(fields []Field, addition string) []Field {
+	if addition == "" {
+		return fields
+	}
+	existing := findField(fields, "HDR format")
+	if existing == "" {
+		return insertFieldBefore(fields, Field{Name: "HDR format", Value: addition}, "Codec ID")
+	}
+	if strings.Contains(existing, addition) {
+		return fields
+	}
+	return setFieldValue(fields, "HDR format", existing+" / "+addition)
 }
 
 func findAC3Sync(payload []byte) []byte {

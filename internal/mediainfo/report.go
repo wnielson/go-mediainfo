@@ -23,6 +23,7 @@ type Stream struct {
 	JSONRaw             map[string]string
 	JSONSkipStreamOrder bool
 	JSONSkipComputed    bool
+	nalLengthSize       int
 }
 
 type Report struct {

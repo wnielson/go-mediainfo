@@ -720,10 +720,14 @@ func skipScalingList(br *bitReader, size int) {
 }
 
 func nalToRBSP(nal []byte) []byte {
-	if len(nal) <= 1 {
+	return nalToRBSPWithHeader(nal, 1)
+}
+
+func nalToRBSPWithHeader(nal []byte, headerLen int) []byte {
+	if headerLen < 0 || len(nal) <= headerLen {
 		return nil
 	}
-	nal = nal[1:]
+	nal = nal[headerLen:]
 	rbsp := make([]byte, 0, len(nal))
 	zeroCount := 0
 	for _, b := range nal {

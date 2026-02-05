@@ -3,11 +3,12 @@ package mediainfo
 import "fmt"
 
 type hevcConfigInfo struct {
-	profileName  string
-	levelName    string
-	tierName     string
-	chromaFormat string
-	bitDepth     uint8
+	profileName   string
+	levelName     string
+	tierName      string
+	chromaFormat  string
+	bitDepth      uint8
+	nalLengthSize int
 }
 
 func parseHEVCConfig(payload []byte) (string, []Field, hevcConfigInfo) {
@@ -19,13 +20,15 @@ func parseHEVCConfig(payload []byte) (string, []Field, hevcConfigInfo) {
 	levelIDC := payload[12]
 	chromaFormatIDC := payload[16] & 0x03
 	bitDepthLuma := (payload[17] & 0x07) + 8
+	lengthSizeMinusOne := payload[21] & 0x03
 
 	info := hevcConfigInfo{
-		profileName:  hevcProfileName(profileIDC),
-		levelName:    hevcLevelName(levelIDC),
-		tierName:     hevcTierName(tierFlag),
-		chromaFormat: hevcChromaFormatName(chromaFormatIDC),
-		bitDepth:     bitDepthLuma,
+		profileName:   hevcProfileName(profileIDC),
+		levelName:     hevcLevelName(levelIDC),
+		tierName:      hevcTierName(tierFlag),
+		chromaFormat:  hevcChromaFormatName(chromaFormatIDC),
+		bitDepth:      bitDepthLuma,
+		nalLengthSize: int(lengthSizeMinusOne) + 1,
 	}
 
 	fields := []Field{}
@@ -88,7 +91,7 @@ func hevcChromaFormatName(idc byte) string {
 	case 0:
 		return "4:0:0"
 	case 1:
-		return "4:2:0"
+		return "4:2:0 (Type 2)"
 	case 2:
 		return "4:2:2"
 	case 3:
