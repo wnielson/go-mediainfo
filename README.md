@@ -50,7 +50,6 @@ mediainfo /path/to/file --output=JSON
 mediainfo /path/to/file --full
 mediainfo /path/to/dir
 mediainfo --info-parameters
-mediainfo --info-canhandleurls
 mediainfo update
 mediainfo version
 ```
@@ -68,7 +67,7 @@ Footer includes `ReportBy : go-mediainfo - vX.Y.Z`.
 - `--logfile=...` (write output to a file)
 - `--bom` (write UTF-8 BOM on Windows)
 - `--help`, `--help-output`
-- `--info-parameters`, `--info-canhandleurls`
+- `--info-parameters`
 
 ## Commands
 
