@@ -41,8 +41,7 @@ var rootCmd = &cobra.Command{
 			_ = cmd.Help()
 			return
 		}
-		exitCode := cli.Run(append([]string{cmd.Name()}, args...), cmd.OutOrStdout(), cmd.ErrOrStderr())
-		os.Exit(exitCode)
+		os.Exit(cli.Run(append([]string{cmd.Name()}, args...), cmd.OutOrStdout(), cmd.ErrOrStderr()))
 	},
 }
 
@@ -50,7 +49,7 @@ var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update mediainfo",
 	Long:  "Update mediainfo to latest version (release builds only).",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runSelfUpdate(cmd.Context())
 	},
 	DisableFlagsInUseLine: true,
@@ -59,7 +58,7 @@ var updateCmd = &cobra.Command{
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print MediaInfo version information",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		cli.Version(cmd.OutOrStdout())
 		return nil
 	},

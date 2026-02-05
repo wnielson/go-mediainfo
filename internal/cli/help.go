@@ -35,10 +35,6 @@ func Help(program string, stdout io.Writer) {
 	fmt.Fprintln(stdout, "update               Update mediainfo to latest version (release builds only)")
 }
 
-func HelpCommand(program string, stdout io.Writer) {
-	Help(program, stdout)
-}
-
 func HelpNothing(program string, stdout io.Writer) {
 	fmt.Fprintf(stdout, "Usage: \"%s [-Options...] FileName1 [Filename2...]\"\n", program)
 	fmt.Fprintf(stdout, "\"%s --help\" for displaying more information\n", program)

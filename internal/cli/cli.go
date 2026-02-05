@@ -37,8 +37,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	program := programName(args[0])
-	opts := Options{}
-	files := make([]string, 0)
+	var opts Options
+	var files []string
 
 	for i := 1; i < len(args); i++ {
 		original := args[i]
@@ -48,7 +48,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		case normalized == "--full" || normalized == "-f":
 			opts.Full = true
 		case normalized == "--help" || normalized == "-h":
-			HelpCommand(program, stdout)
+			Help(program, stdout)
 			return exitOK
 		case strings.HasPrefix(normalized, "--help-"):
 			return helpTopic(normalized, program, stdout)
@@ -103,7 +103,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	output, filesCount, err := runCore(opts, files)
 	if err != nil {
-		fmt.Fprintln(stderr, err.Error())
+		fmt.Fprintln(stderr, err)
 		return exitError
 	}
 
@@ -113,7 +113,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	if opts.LogFile != "" {
 		if err := writeLogFile(opts.LogFile, output, opts.Bom); err != nil {
-			fmt.Fprintln(stderr, err.Error())
+			fmt.Fprintln(stderr, err)
 			return exitError
 		}
 	}
@@ -126,13 +126,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func helpTopic(normalized, program string, stdout io.Writer) int {
-	switch normalized {
-	case "--help-output", "--help-inform":
+	if normalized == "--help-output" || normalized == "--help-inform" {
 		HelpOutput(program, stdout)
-	default:
-		fmt.Fprintln(stdout, "No help available yet")
+		return exitOK
 	}
 
+	fmt.Fprintln(stdout, "No help available yet")
 	return exitOK
 }
 
@@ -197,10 +196,7 @@ func writeLogFile(path, output string, includeBOM bool) error {
 		data = append([]byte{0xEF, 0xBB, 0xBF}, data...)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return err
-	}
-	return nil
+	return os.WriteFile(path, data, 0644)
 }
 
 func runCore(opts Options, files []string) (string, int, error) {
@@ -208,25 +204,11 @@ func runCore(opts Options, files []string) (string, int, error) {
 		if strings.Contains(opts.Output, ";") || strings.HasPrefix(strings.ToLower(opts.Output), "file://") {
 			return "", 0, fmt.Errorf("output template not implemented: %s", opts.Output)
 		}
+
 		outputName := strings.ToUpper(strings.TrimSpace(opts.Output))
-		known := map[string]bool{
-			"TEXT":         true,
-			"JSON":         true,
-			"XML":          true,
-			"OLDXML":       true,
-			"HTML":         true,
-			"CSV":          true,
-			"EBUCORE":      true,
-			"EBUCORE_JSON": true,
-			"PBCORE":       true,
-			"PBCORE2":      true,
-			"GRAPH_SVG":    true,
-			"GRAPH_DOT":    true,
-		}
-		if !known[outputName] {
-			return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
-		}
-		if outputName != "TEXT" && outputName != "JSON" && outputName != "XML" && outputName != "OLDXML" && outputName != "HTML" && outputName != "CSV" && outputName != "EBUCORE" && outputName != "EBUCORE_JSON" && outputName != "PBCORE" && outputName != "PBCORE2" {
+		switch outputName {
+		case "TEXT", "JSON", "XML", "OLDXML", "HTML", "CSV", "EBUCORE", "EBUCORE_JSON", "PBCORE", "PBCORE2":
+		default:
 			return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
 		}
 	}
