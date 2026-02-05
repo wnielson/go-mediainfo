@@ -580,6 +580,7 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	var audioSampleRate float64
 	var defaultDuration uint64
 	var bitRate uint64
+	var trackBitRate bool
 	var flagDefault *bool
 	var flagForced *bool
 	for pos < len(buf) {
@@ -650,8 +651,10 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		if id == mkvIDBitRate {
 			if value, ok := readUnsigned(buf[dataStart:dataEnd]); ok {
 				bitRate = value
+				trackBitRate = true
 			} else if value, ok := readFloat(buf[dataStart:dataEnd]); ok {
 				bitRate = uint64(math.Round(value))
+				trackBitRate = true
 			}
 		}
 		if id == mkvIDDefaultDuration {
@@ -741,6 +744,7 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		bitRate = uint64(spsInfo.BitRate)
 	}
 	if kind == StreamVideo {
+		bitRateNominal := trackBitRate || (spsInfo.HasBitRateCBR && spsInfo.BitRateCBR)
 		storedWidth := videoInfo.pixelWidth
 		storedHeight := videoInfo.pixelHeight
 		if videoInfo.codedWidth > 0 {
@@ -797,8 +801,13 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 			}
 		}
 		if bitRate > 0 {
-			fields = append(fields, Field{Name: "Maximum bit rate", Value: formatBitrate(float64(bitRate))})
-			fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
+			if bitRateNominal {
+				fields = append(fields, Field{Name: "Nominal bit rate", Value: formatBitrate(float64(bitRate))})
+				fields = append(fields, Field{Name: "Bit rate mode", Value: "Constant"})
+			} else {
+				fields = append(fields, Field{Name: "Maximum bit rate", Value: formatBitrate(float64(bitRate))})
+				fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
+			}
 			if defaultDuration > 0 && displayWidth > 0 && displayHeight > 0 {
 				rate := 1e9 / float64(defaultDuration)
 				if bits := formatBitsPerPixelFrame(float64(bitRate), displayWidth, displayHeight, rate); bits != "" {
@@ -886,7 +895,12 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 		jsonExtras["UniqueID"] = fmt.Sprintf("%d", trackUID)
 	}
 	if bitRate > 0 {
-		jsonExtras["BitRate_Maximum"] = strconv.FormatUint(bitRate, 10)
+		bitRateNominal := trackBitRate || (spsInfo.HasBitRateCBR && spsInfo.BitRateCBR)
+		if bitRateNominal {
+			jsonExtras["BitRate_Nominal"] = strconv.FormatUint(bitRate, 10)
+		} else {
+			jsonExtras["BitRate_Maximum"] = strconv.FormatUint(bitRate, 10)
+		}
 	}
 	if languageCode != "" {
 		jsonExtras["Language"] = languageCode

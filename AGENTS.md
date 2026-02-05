@@ -23,7 +23,7 @@ Owner: soup
 - DVD JSON: Language uses ISO-639 code (e.g., `en`), text uses full name (e.g., English)
 - DVD JSON: Menu order is Duration, Delay, FrameRate, FrameRate_Num, FrameRate_Den, FrameCount, extra
 - DVD JSON: SamplingCount present for audio; PixelAspectRatio present for video even when computed fields skipped
-- JSON: FileExtension preserves filename case; File_Created_Date/Local emitted when available
+- JSON: FileExtension preserves filename case; do not emit File_Created_Date/Local (CLI omits)
 - DVD aggregate (VTS_XX_0.IFO): parse title-set VOBs via streaming MPEG-PS; file size = sum VTS_XX_1..n + IFO (exclude VTS_XX_0.VOB)
 - DVD aggregate JSON: add AC-3 *_String extras + dialnorm_Count; add Source in stream extra
 - DVD IFO/BUP: audio/subpic counts are 16-bit; subpic attrs are 6 bytes, audio attrs 8 bytes
@@ -108,6 +108,8 @@ Owner: soup
 - Matroska: ParseSpeed <1 skips cluster stats for small files (<=4 MiB) but still runs AC-3 probes; avoids bitrate/duration overrides
 - Matroska: color source tracked (Container vs Stream); Color space only when stream color; JSON colour_* sources follow origin
 - Matroska: FrameRate_Mode_Original=VFR when H.264 SPS fixed_frame_rate_flag is false (CFR derived from DefaultDuration)
+- Matroska: Track BitRate (or H.264 HRD CBR) -> Nominal bit rate + Bit rate mode Constant; HRD VBR -> Maximum bit rate + Variable
+- Matroska: Overall bit rate mode emitted only when Variable (matches MediaInfo)
 - MPEG-TS: overall duration/bitrate derived from PCR interval average (packets between PCRs) to match CLI
 - MPEG-TS: handle PCR PID payload (don't skip PES when PCR PID == video PID)
 - MPEG-TS: parse x264 writing library + encoding settings from video PES (Annex B), add Nominal bit rate

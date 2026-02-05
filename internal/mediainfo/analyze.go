@@ -252,8 +252,6 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 			general.JSON["IsStreamable"] = "Yes"
 			var streamSizeSum int64
-			var overallMode string
-			var overallModeField string
 			for _, stream := range streams {
 				if stream.JSON != nil {
 					if value, ok := stream.JSON["StreamSize"]; ok {
@@ -261,25 +259,29 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 							streamSizeSum += parsed
 						}
 					}
-					if overallMode == "" && stream.Kind == StreamVideo {
-						if mode := stream.JSON["BitRate_Mode"]; mode != "" {
-							overallMode = mode
-						}
-					}
 				} else if sizeValue := findField(stream.Fields, "Stream size"); sizeValue != "" {
 					if parsed, ok := parseSizeBytes(sizeValue); ok {
 						streamSizeSum += parsed
 					}
 				}
-				if overallMode == "" && stream.Kind == StreamVideo {
-					if mode := findField(stream.Fields, "Bit rate mode"); mode != "" {
-						overallMode = mapBitrateMode(mode)
-					}
+			}
+			if streamSizeSum > 0 {
+				remaining := stat.Size() - streamSizeSum
+				if remaining >= 0 {
+					general.JSON["StreamSize"] = fmt.Sprintf("%d", remaining)
 				}
-				if overallModeField == "" && stream.Kind == StreamVideo {
-					if mode := findField(stream.Fields, "Bit rate mode"); mode != "" {
-						overallModeField = mode
-					} else if mode := stream.JSON["BitRate_Mode"]; mode != "" {
+			}
+			overallModeField := ""
+			for _, stream := range streams {
+				if stream.Kind != StreamVideo {
+					continue
+				}
+				if mode := findField(stream.Fields, "Bit rate mode"); mode != "" {
+					overallModeField = mode
+					break
+				}
+				if stream.JSON != nil {
+					if mode := stream.JSON["BitRate_Mode"]; mode != "" {
 						switch strings.ToUpper(mode) {
 						case "VBR":
 							overallModeField = "Variable"
@@ -288,20 +290,13 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 						default:
 							overallModeField = mode
 						}
+						break
 					}
 				}
 			}
-			if overallMode != "" {
-				general.JSON["OverallBitRate_Mode"] = overallMode
-			}
-			if overallModeField != "" {
+			if overallModeField == "Variable" {
 				general.Fields = appendFieldUnique(general.Fields, Field{Name: "Overall bit rate mode", Value: overallModeField})
-			}
-			if streamSizeSum > 0 {
-				remaining := stat.Size() - streamSizeSum
-				if remaining >= 0 {
-					general.JSON["StreamSize"] = fmt.Sprintf("%d", remaining)
-				}
+				general.JSON["OverallBitRate_Mode"] = mapBitrateMode(overallModeField)
 			}
 			for _, stream := range streams {
 				if stream.Kind != StreamVideo {

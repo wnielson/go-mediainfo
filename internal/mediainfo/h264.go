@@ -29,6 +29,8 @@ type h264SPSInfo struct {
 	HasFixedFrameRate       bool
 	BitRate                 int64
 	HasBitRate              bool
+	BitRateCBR              bool
+	HasBitRateCBR           bool
 	BufferSize              int64
 	HasBufferSize           bool
 }
@@ -156,6 +158,8 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	hasColorDescription := false
 	bitRate := int64(0)
 	hasBitRate := false
+	bitRateCBR := false
+	hasBitRateCBR := false
 	bufferSize := int64(0)
 	hasBufferSize := false
 
@@ -300,10 +304,12 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		}
 		nalHRDPresent := br.readBitsValue(1) == 1
 		if nalHRDPresent {
-			if hrdBitRate, hrdBuffer, ok := parseH264HRD(br); ok {
+			if hrdBitRate, hrdBuffer, hrdCBR, ok := parseH264HRD(br); ok {
 				if hrdBitRate > 0 {
 					bitRate = hrdBitRate
 					hasBitRate = true
+					bitRateCBR = hrdCBR
+					hasBitRateCBR = true
 				}
 				if hrdBuffer > 0 {
 					bufferSize = hrdBuffer
@@ -313,10 +319,12 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		}
 		vclHRDPresent := br.readBitsValue(1) == 1
 		if vclHRDPresent {
-			if hrdBitRate, hrdBuffer, ok := parseH264HRD(br); ok {
+			if hrdBitRate, hrdBuffer, hrdCBR, ok := parseH264HRD(br); ok {
 				if hrdBitRate > 0 && !hasBitRate {
 					bitRate = hrdBitRate
 					hasBitRate = true
+					bitRateCBR = hrdCBR
+					hasBitRateCBR = true
 				}
 				if hrdBuffer > 0 && !hasBufferSize {
 					bufferSize = hrdBuffer
@@ -353,6 +361,8 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		HasFixedFrameRate:       hasFixedFrameRate,
 		BitRate:                 bitRate,
 		HasBitRate:              hasBitRate,
+		BitRateCBR:              bitRateCBR,
+		HasBitRateCBR:           hasBitRateCBR,
 		BufferSize:              bufferSize,
 		HasBufferSize:           hasBufferSize,
 	}
@@ -360,44 +370,49 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	return info
 }
 
-func parseH264HRD(br *bitReader) (int64, int64, bool) {
+func parseH264HRD(br *bitReader) (int64, int64, bool, bool) {
 	cpbCntMinus1, ok := br.readUEWithOk()
 	if !ok {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	bitRateScale := br.readBitsValue(4)
 	cpbSizeScale := br.readBitsValue(4)
 	if bitRateScale == ^uint64(0) || cpbSizeScale == ^uint64(0) {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	var bitRateValue int
 	var cpbSizeValue int
+	var cbrFlag bool
 	for i := 0; i <= cpbCntMinus1; i++ {
 		brValue, ok := br.readUEWithOk()
 		if !ok {
-			return 0, 0, false
+			return 0, 0, false, false
 		}
 		value, ok := br.readUEWithOk()
 		if !ok {
-			return 0, 0, false
+			return 0, 0, false, false
 		}
 		if i == 0 {
 			bitRateValue = brValue
 			cpbSizeValue = value
 		}
-		if br.readBitsValue(1) == ^uint64(0) {
-			return 0, 0, false
+		flag := br.readBitsValue(1)
+		if flag == ^uint64(0) {
+			return 0, 0, false, false
+		}
+		if i == 0 {
+			cbrFlag = flag == 1
 		}
 	}
 	if br.readBitsValue(5) == ^uint64(0) || br.readBitsValue(5) == ^uint64(0) || br.readBitsValue(5) == ^uint64(0) || br.readBitsValue(5) == ^uint64(0) {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	bitRate := int64(bitRateValue+1) << (6 + bitRateScale)
 	bufferSize := int64(cpbSizeValue+1) << (4 + cpbSizeScale)
 	if bitRate < 0 || bufferSize < 0 {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	return bitRate, bufferSize, true
+	return bitRate, bufferSize, cbrFlag, true
 }
 
 func parseH264PPSCabac(nal []byte) (bool, bool) {
