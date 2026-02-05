@@ -4,7 +4,7 @@
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:schemaLocation="https://mediaarea.net/mediainfo https://mediaarea.net/mediainfo/mediainfo_2_0.xsd"
     version="2.0">
-<creatingLibrary version="26.01" url="https://mediaarea.net/MediaInfo">MediaInfoLib</creatingLibrary>
+<creatingLibrary version="dev" url="https://github.com/autobrr/go-mediainfo">go-mediainfo</creatingLibrary>
 <media ref="samples/sample.mp3">
 <track type="General">
 <AudioCount>1</AudioCount>

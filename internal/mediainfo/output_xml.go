@@ -41,7 +41,7 @@ func RenderXML(reports []Report) string {
 	buf.WriteString("    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n")
 	buf.WriteString(fmt.Sprintf("    xsi:schemaLocation=\"%s %s\"\n", mediaInfoXMLNS, mediaInfoXMLSchema))
 	buf.WriteString(fmt.Sprintf("    version=\"%s\">\n", mediaInfoXMLVersion))
-	buf.WriteString(fmt.Sprintf("<creatingLibrary version=\"%s\" url=\"%s\">MediaInfoLib</creatingLibrary>\n", MediaInfoLibVersion, MediaInfoLibURL))
+	buf.WriteString(fmt.Sprintf("<creatingLibrary version=\"%s\" url=\"%s\">%s</creatingLibrary>\n", AppVersion, AppURL, AppName))
 
 	for _, report := range reports {
 		buf.WriteString(renderXMLMedia(report))

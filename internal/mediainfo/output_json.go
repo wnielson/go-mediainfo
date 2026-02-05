@@ -39,9 +39,9 @@ func buildJSONPayload(report Report) jsonPayloadOut {
 
 func jsonCreatingLibraryFields() []jsonKV {
 	return []jsonKV{
-		{Key: "name", Val: "MediaInfoLib"},
-		{Key: "version", Val: MediaInfoLibVersion},
-		{Key: "url", Val: MediaInfoLibURL},
+		{Key: "name", Val: AppName},
+		{Key: "version", Val: AppVersion},
+		{Key: "url", Val: AppURL},
 	}
 }
 

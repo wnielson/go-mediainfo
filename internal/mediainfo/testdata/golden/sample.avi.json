@@ -1,5 +1,5 @@
 {
-"creatingLibrary":{"name":"MediaInfoLib","version":"26.01","url":"https://mediaarea.net/MediaInfo"},
+"creatingLibrary":{"name":"go-mediainfo","version":"dev","url":"https://github.com/autobrr/go-mediainfo"},
 "media":{"@ref":"samples/sample.avi","track":[{"@type":"General","VideoCount":"1",
 "FileExtension":"avi",
 "Format":"AVI",

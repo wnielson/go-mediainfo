@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 
 	"github.com/blang/semver"
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/spf13/cobra"
 
 	"github.com/autobrr/go-mediainfo/internal/cli"
+	"github.com/autobrr/go-mediainfo/internal/mediainfo"
 )
 
 var version = "dev"
@@ -67,7 +70,9 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
-	cli.SetVersion(version)
+	resolvedVersion := resolveVersion()
+	cli.SetVersion(resolvedVersion)
+	mediainfo.SetAppVersion(resolvedVersion)
 	rootCmd.SetOut(os.Stdout)
 	rootCmd.SetErr(os.Stderr)
 	rootCmd.SetHelpTemplate(helpTemplate)
@@ -115,4 +120,20 @@ func runSelfUpdate(ctx context.Context) error {
 
 	fmt.Printf("Successfully updated to version: %s\n", latest.Version())
 	return nil
+}
+
+func resolveVersion() string {
+	if version != "" && version != "dev" {
+		return normalizeVersion(version)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return normalizeVersion(info.Main.Version)
+		}
+	}
+	return "dev"
+}
+
+func normalizeVersion(value string) string {
+	return strings.TrimPrefix(value, "v")
 }
