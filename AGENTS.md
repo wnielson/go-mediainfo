@@ -162,6 +162,7 @@ Owner: soup
 - Matroska E-AC-3: parse laced frames per-frame for probe stats
 - E-AC-3 compr field uses 0xFF mapping (ac3ComprDB(0xFF)) even when stats exclude 0xFF
 - CLI: cobra wrapper with ASCII banner; no-args shows cobra help, flags passthrough to internal CLI
+- Release/CI: GoReleaser v2 + GitHub Actions CI (gofmt/vet/test/tidy), tag-triggered releases (v*)
 
 ## Notes
 - Update this file as we learn more about CLI behavior, formats, and edge cases.

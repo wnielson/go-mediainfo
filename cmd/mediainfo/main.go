@@ -9,6 +9,8 @@ import (
 	"github.com/autobrr/go-mediainfo/internal/cli"
 )
 
+var version = "dev"
+
 const helpBanner = "" +
 	"                                                                                \n" +
 	" __  __          _ _        ___        __\n" +
