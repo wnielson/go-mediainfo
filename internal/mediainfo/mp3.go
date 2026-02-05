@@ -1,7 +1,6 @@
 package mediainfo
 
 import (
-	"bytes"
 	"io"
 )
 
@@ -74,14 +73,14 @@ func ParseMP3(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, bool) {
 }
 
 func skipID3v2(file io.ReadSeeker) (int64, error) {
-	header := make([]byte, 10)
-	if _, err := io.ReadFull(file, header); err != nil {
+	var header [10]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return 0, err
 		}
 		return 0, nil
 	}
-	if !bytes.HasPrefix(header, []byte("ID3")) {
+	if header[0] != 'I' || header[1] != 'D' || header[2] != '3' {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return 0, err
 		}
@@ -102,11 +101,11 @@ func hasID3v1(file io.ReadSeeker, size int64) bool {
 	if _, err := file.Seek(size-128, io.SeekStart); err != nil {
 		return false
 	}
-	buf := make([]byte, 3)
-	if _, err := io.ReadFull(file, buf); err != nil {
+	var buf [3]byte
+	if _, err := io.ReadFull(file, buf[:]); err != nil {
 		return false
 	}
-	return bytes.Equal(buf, []byte("TAG"))
+	return buf[0] == 'T' && buf[1] == 'A' && buf[2] == 'G'
 }
 
 func findMP3Header(file io.ReadSeeker, offset int64) (mp3HeaderInfo, bool, bool) {
