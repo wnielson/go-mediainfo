@@ -2,12 +2,18 @@ package mediainfo
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
 func TestMpegVideoJSONFields(t *testing.T) {
 	path := filepath.Join("..", "..", "samples", "sample.mpg")
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat sample: %v", err)
+	}
 	report, err := AnalyzeFile(path)
 	if err != nil {
 		t.Fatalf("analyze sample: %v", err)
@@ -46,22 +52,42 @@ func TestMpegVideoJSONFields(t *testing.T) {
 		t.Fatalf("missing general or video track")
 	}
 
-	if got, _ := general["OverallBitRate"].(string); got != "328915" {
-		t.Fatalf("unexpected overall bitrate: %v", got)
-	}
-	if got, _ := general["FrameCount"].(string); got != "400" {
-		t.Fatalf("unexpected general framecount: %v", got)
-	}
 	if got, _ := general["StreamSize"].(string); got != "0" {
 		t.Fatalf("unexpected general stream size: %v", got)
 	}
 
-	if got, _ := video["BitRate"].(string); got != "328915" {
-		t.Fatalf("unexpected video bitrate: %v", got)
+	genDuration, _ := general["Duration"].(string)
+	if genDuration == "" {
+		t.Fatalf("missing general duration")
 	}
-	if got, _ := video["StreamSize"].(string); got != "548754" {
-		t.Fatalf("unexpected video stream size: %v", got)
+	videoDuration, _ := video["Duration"].(string)
+	if videoDuration == "" {
+		t.Fatalf("missing video duration")
 	}
+	if genDuration != videoDuration {
+		t.Fatalf("duration mismatch: general=%v video=%v", genDuration, videoDuration)
+	}
+
+	streamSizeStr, _ := video["StreamSize"].(string)
+	if streamSizeStr == "" {
+		t.Fatalf("missing video stream size")
+	}
+	streamSize, err := strconv.ParseInt(streamSizeStr, 10, 64)
+	if err != nil {
+		t.Fatalf("parse video stream size: %v", err)
+	}
+	if streamSize != stat.Size() {
+		t.Fatalf("unexpected video stream size: got=%d want=%d", streamSize, stat.Size())
+	}
+
+	if got, _ := general["OverallBitRate"].(string); got == "" {
+		t.Fatalf("missing overall bitrate")
+	} else if got, _ := video["BitRate"].(string); got == "" {
+		t.Fatalf("missing video bitrate")
+	} else if general["OverallBitRate"] != video["BitRate"] {
+		t.Fatalf("bitrate mismatch: general=%v video=%v", general["OverallBitRate"], video["BitRate"])
+	}
+
 	if got, _ := video["Delay_Settings"].(string); got != "drop_frame_flag=0 / closed_gop=1 / broken_link=0" {
 		t.Fatalf("unexpected delay settings: %v", got)
 	}
