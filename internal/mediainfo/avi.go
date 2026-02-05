@@ -106,8 +106,8 @@ func ParseAVI(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field,
 
 	offset := int64(12)
 	for offset+8 <= size {
-		chunkHeader := make([]byte, 8)
-		if _, err := readAt(file, offset, chunkHeader); err != nil {
+		var chunkHeader [8]byte
+		if _, err := readAt(file, offset, chunkHeader[:]); err != nil {
 			break
 		}
 		chunkID := string(chunkHeader[0:4])
@@ -118,11 +118,11 @@ func ParseAVI(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field,
 			break
 		}
 		if chunkID == "LIST" {
-			listTypeBytes := make([]byte, 4)
-			if _, err := readAt(file, dataStart, listTypeBytes); err != nil {
+			var listTypeBytes [4]byte
+			if _, err := readAt(file, dataStart, listTypeBytes[:]); err != nil {
 				break
 			}
-			listType := string(listTypeBytes)
+			listType := string(listTypeBytes[:])
 			listDataStart := dataStart + 4
 			listDataSize := chunkSize - 4
 			switch listType {
@@ -403,8 +403,8 @@ func parseAVIINFO(data []byte) string {
 func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, videoData *[]byte, vopScan *vopScanner) {
 	offset := start
 	for offset+8 <= end {
-		header := make([]byte, 8)
-		if _, err := readAt(file, offset, header); err != nil {
+		var header [8]byte
+		if _, err := readAt(file, offset, header[:]); err != nil {
 			break
 		}
 		chunkID := string(header[0:4])
