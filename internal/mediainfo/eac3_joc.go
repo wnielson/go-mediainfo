@@ -6,6 +6,7 @@ import (
 )
 
 type eac3Dec3Info struct {
+	parsed        bool
 	hasJOC        bool
 	hasJOCComplex bool
 	jocComplexity int
@@ -103,8 +104,10 @@ func parseEAC3Dec3Payload(data []byte) (eac3Dec3Info, bool) {
 		}
 	}
 	if info.hasJOC || info.hasJOCComplex {
+		info.parsed = true
 		return info, true
 	}
+	info.parsed = true
 	return info, false
 }
 

@@ -33,11 +33,14 @@ type matroskaTagStats struct {
 }
 
 type matroskaAudioProbe struct {
-	format       string
-	info         ac3Info
-	ok           bool
-	collect      bool
-	targetFrames int
+	format        string
+	info          ac3Info
+	ok            bool
+	collect       bool
+	targetFrames  int
+	targetPackets int
+	packetCount   int
+	parseJOC      bool
 }
 
 type matroskaVideoProbe struct {
@@ -481,7 +484,9 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 				if needVideo {
 					peek = int64(matroskaVideoProbeMaxBytes)
 				} else if needAudio && audioProbe != nil && audioProbe.format == "E-AC-3" {
-					peek = size
+					if audioProbe.parseJOC {
+						peek = size
+					}
 				}
 				peek = min(size, peek)
 				payload, err := er.readN(peek)
@@ -498,6 +503,12 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 					if err := er.skip(size - peek); err != nil {
 						return 0, 0, 0, 0, err
 					}
+				}
+			}
+			if needAudio && audioProbe != nil && audioProbe.format == "E-AC-3" && audioProbe.targetPackets > 0 {
+				audioProbe.packetCount++
+				if audioProbe.packetCount >= audioProbe.targetPackets {
+					audioProbe.collect = false
 				}
 			}
 			return trackVal, timecode, dataSize, frameCount, nil
@@ -999,8 +1010,8 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 			probe.ok = true
 		}
 	case "E-AC-3":
-		if info, frameSize, ok := parseEAC3Frame(payload); ok {
-			if !ac3HasJOCInfo(info) {
+		if info, frameSize, ok := parseEAC3FrameWithOptions(payload, probe.parseJOC); ok {
+			if probe.parseJOC && !ac3HasJOCInfo(info) {
 				offset := 2
 				if frameSize > 0 && frameSize < len(payload) {
 					offset = frameSize
@@ -1012,7 +1023,7 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 					}
 					offset += sync
 					sub := payload[offset:]
-					subInfo, subSize, ok := parseEAC3Frame(sub)
+					subInfo, subSize, ok := parseEAC3FrameWithOptions(sub, true)
 					if ok && ac3HasJOCInfo(subInfo) {
 						info.mergeFrame(subInfo)
 						break
@@ -1048,6 +1059,9 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 				probe.ok = true
 			} else {
 				probe.info.mergeFrame(info)
+			}
+			if probe.parseJOC && ac3HasJOCInfo(probe.info) {
+				probe.parseJOC = false
 			}
 			if probe.targetFrames > 0 && probe.info.comprCount >= probe.targetFrames {
 				probe.collect = false

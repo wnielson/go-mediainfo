@@ -382,6 +382,10 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 }
 
 func parseEAC3Frame(payload []byte) (ac3Info, int, bool) {
+	return parseEAC3FrameWithOptions(payload, true)
+}
+
+func parseEAC3FrameWithOptions(payload []byte, parseJOC bool) (ac3Info, int, bool) {
 	var info ac3Info
 	if len(payload) < 7 {
 		return info, 0, false
@@ -468,8 +472,10 @@ func parseEAC3Frame(payload []byte) (ac3Info, int, bool) {
 	}
 	channels, layout := ac3ChannelLayout(int(acmod), lfeonVal == 1)
 	var jocMeta eac3JOCMeta
-	if meta, ok := parseEAC3EMDF(payload); ok {
-		jocMeta = meta
+	if parseJOC {
+		if meta, ok := parseEAC3EMDF(payload); ok {
+			jocMeta = meta
+		}
 	}
 	info = ac3Info{
 		bitRateKbps:   bitRate,

@@ -97,6 +97,7 @@ const (
 )
 
 const matroskaEAC3QuickProbeFrames = 1113
+const matroskaEAC3QuickProbePackets = 300
 
 type MatroskaInfo struct {
 	Container     ContainerInfo
@@ -172,6 +173,7 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 					}
 					probe := &matroskaAudioProbe{format: format}
 					if format == "E-AC-3" {
+						probe.parseJOC = !stream.eac3Dec3.parsed || stream.eac3Dec3.hasJOC || stream.eac3Dec3.hasJOCComplex
 						if stream.eac3Dec3.hasJOCComplex {
 							probe.info.hasJOCComplex = true
 							probe.info.jocComplexity = stream.eac3Dec3.jocComplexity
@@ -182,6 +184,7 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 						probe.collect = true
 						if opts.ParseSpeed < 1 {
 							probe.targetFrames = matroskaEAC3QuickProbeFrames
+							probe.targetPackets = matroskaEAC3QuickProbePackets
 						}
 					}
 					audioProbes[id] = probe
@@ -767,7 +770,7 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 	}
 	var dec3Info eac3Dec3Info
 	if kind == StreamAudio && format == "E-AC-3" && len(codecPrivate) > 0 {
-		if info, ok := parseEAC3Dec3(codecPrivate); ok {
+		if info, ok := parseEAC3Dec3(codecPrivate); ok || info.parsed {
 			dec3Info = info
 		}
 	}
