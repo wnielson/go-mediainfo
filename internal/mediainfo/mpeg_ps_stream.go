@@ -498,15 +498,23 @@ func parseMPEGPSFileSample(parser *psStreamParser, file *os.File, opts mpegPSOpt
 		parsedAny = true
 	}
 	if size > sampleSize*2 {
+		tailSample := sampleSize
+		if opts.dvdParsing && parseSpeed < 1 {
+			tailSample = min(tailSample, int64(8<<20))
+		}
 		if opts.dvdParsing {
-			mid := (size - sampleSize) / 2
-			middle := io.NewSectionReader(file, mid, sampleSize)
+			midSample := sampleSize
+			if parseSpeed < 1 {
+				midSample = min(midSample, int64(4<<20))
+			}
+			mid := (size - midSample) / 2
+			middle := io.NewSectionReader(file, mid, midSample)
 			if reader(middle) {
 				parsedAny = true
 			}
 		}
-		start := size - sampleSize
-		last := io.NewSectionReader(file, start, sampleSize)
+		start := size - tailSample
+		last := io.NewSectionReader(file, start, tailSample)
 		if reader(last) {
 			parsedAny = true
 		}
