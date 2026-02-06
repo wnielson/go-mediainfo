@@ -263,17 +263,13 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 	return info, true
 }
 
-func shouldApplyMatroskaClusterStats(parseSpeed float64, size int64, tagStats map[uint64]matroskaTagStats, tagStatsComplete bool) bool {
+func shouldApplyMatroskaClusterStats(parseSpeed float64, _ int64, _ map[uint64]matroskaTagStats, _ bool) bool {
 	if parseSpeed >= 1 {
 		return true
 	}
-	if size <= mkvMaxScan {
-		return false
-	}
-	if tagStatsComplete {
-		return false
-	}
-	return len(tagStats) == 0
+	// MediaInfo at default parse speed does not do a full Cluster pass.
+	// Keep probes enabled, but skip expensive stats scan unless user asks for ParseSpeed=1.
+	return false
 }
 
 func findMatroskaSeekPosition(buf []byte, segmentOffset int, targetID uint64) (uint64, bool) {
@@ -861,13 +857,13 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 			}
 		}
 		if id == mkvIDTrackName {
-			trackName = string(buf[dataStart:dataEnd])
+			trackName = strings.TrimRight(string(buf[dataStart:dataEnd]), "\x00")
 		}
 		if id == mkvIDTrackLanguage {
-			trackLanguage = string(buf[dataStart:dataEnd])
+			trackLanguage = strings.TrimRight(string(buf[dataStart:dataEnd]), "\x00")
 		}
 		if id == mkvIDTrackLanguageIETF {
-			trackLanguageIETF = string(buf[dataStart:dataEnd])
+			trackLanguageIETF = strings.TrimRight(string(buf[dataStart:dataEnd]), "\x00")
 		}
 		if id == mkvIDCodecID {
 			codecID = string(buf[dataStart:dataEnd])

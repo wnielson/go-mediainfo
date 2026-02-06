@@ -270,12 +270,12 @@ func TestShouldApplyMatroskaClusterStats(t *testing.T) {
 			want:       false,
 		},
 		{
-			name:       "large file with no tag stats applies",
+			name:       "large file with no tag stats skips",
 			parseSpeed: 0.5,
 			size:       mkvMaxScan + 1,
 			tagStats:   nil,
 			complete:   false,
-			want:       true,
+			want:       false,
 		},
 		{
 			name:       "large file with some tag stats skips",
