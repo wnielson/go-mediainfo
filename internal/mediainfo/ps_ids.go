@@ -44,6 +44,7 @@ type psStream struct {
 	videoBuffer          []byte
 	videoCCCarry         []byte
 	videoFrameCount      int
+	derivedDuration      float64
 	ccFound              bool
 	ccOdd                ccTrack
 	ccEven               ccTrack

@@ -476,6 +476,7 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 					duration += 1.0 / (info.FrameRate * 10.0)
 				}
 				if duration > 0 {
+					st.derivedDuration = duration
 					fields = addStreamDuration(fields, duration)
 				}
 				effectiveBytes := st.bytes
@@ -1078,6 +1079,7 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 		videoDuration = duration
 	}
 	maxDuration := 0.0
+	usedDerivedDuration := false
 	for _, st := range streams {
 		if st == nil || st.kind == StreamMenu {
 			continue
@@ -1085,6 +1087,10 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 		duration := ptsDurationPS(st.pts, opts)
 		if st.kind == StreamAudio {
 			duration = audioDurationPS(st, opts)
+		}
+		if duration == 0 && st.kind == StreamVideo && st.derivedDuration > 0 {
+			duration = st.derivedDuration
+			usedDerivedDuration = true
 		}
 		if duration > maxDuration {
 			maxDuration = duration
@@ -1094,6 +1100,11 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 		maxDuration = videoDuration
 	}
 	if maxDuration > 0 {
+		// MediaInfo often quantizes very short durations (e.g. 1-frame menu VOBs)
+		// to milliseconds, which affects derived overall bitrate rounding.
+		if usedDerivedDuration && ptsDurationPS(anyPTS, opts) == 0 && ptsDurationPS(videoPTS, opts) == 0 {
+			maxDuration = math.Round(maxDuration*1000) / 1000
+		}
 		info.DurationSeconds = maxDuration
 	} else if duration := ptsDurationPS(anyPTS, opts); duration > 0 {
 		info.DurationSeconds = duration
