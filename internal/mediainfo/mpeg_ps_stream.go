@@ -381,7 +381,6 @@ func (p *psStreamParser) consumePayload(entry *psStream, key uint16, flags byte,
 	entry.bytes += uint64(len(payload))
 	if entry.kind == StreamVideo {
 		consumeMPEG2Captions(entry, payload, pts, hasPTS)
-		consumeMPEG2StartCodeStats(entry, payload, (flags&0x80) != 0)
 		parser := p.videoParsers[key]
 		if parser == nil {
 			parser = &mpeg2VideoParser{}
