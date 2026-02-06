@@ -225,8 +225,17 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 						}
 						probe.collect = true
 						if opts.ParseSpeed < 1 {
-							probe.targetFrames = matroskaEAC3QuickProbeFrames
-							probe.targetPackets = matroskaEAC3QuickProbePackets
+							// DEC3 already contains core E-AC-3 metadata for default
+							// parse speed output. Avoid expensive Cluster probing when
+							// DEC3 is present.
+							if stream.eac3Dec3.parsed {
+								probe.ok = true
+								probe.collect = false
+								probe.parseJOC = false
+							} else {
+								probe.targetFrames = matroskaEAC3QuickProbeFrames
+								probe.targetPackets = matroskaEAC3QuickProbePackets
+							}
 						}
 					}
 					audioProbes[id] = probe
