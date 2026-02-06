@@ -84,6 +84,11 @@ func (s *vopScanner) feed(data []byte) {
 }
 
 func ParseAVI(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field, bool) {
+	return ParseAVIWithOptions(file, size, defaultAnalyzeOptions())
+}
+
+func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (ContainerInfo, []Stream, []Field, bool) {
+	opts = normalizeAnalyzeOptions(opts)
 	if size < 12 {
 		return ContainerInfo{}, nil, nil, false
 	}
@@ -104,6 +109,9 @@ func ParseAVI(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field,
 	var videoData []byte
 	var vopScan vopScanner
 	setFormatSettings := false
+	var moviStart int64
+	var moviEnd int64
+	haveIndex := false
 
 	offset := int64(12)
 	for offset+8 <= size {
@@ -145,11 +153,32 @@ func ParseAVI(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field,
 					writingApp = app
 				}
 			case "movi":
-				parseAVIMovi(file, listDataStart, dataEnd, streams, &videoData, &vopScan)
+				if opts.ParseSpeed >= 1 {
+					parseAVIMovi(file, listDataStart, dataEnd, streams, &videoData, &vopScan, 0, true)
+				} else {
+					moviStart = listDataStart
+					moviEnd = dataEnd
+				}
+			}
+		} else if chunkID == "idx1" {
+			indexData := make([]byte, chunkSize)
+			if _, err := readAt(file, dataStart, indexData); err != nil {
+				break
+			}
+			if parseAVIIndex(indexData, streams) {
+				haveIndex = true
 			}
 		}
 		pad := chunkSize % 2
 		offset = dataEnd + pad
+	}
+	if opts.ParseSpeed < 1 && moviStart > 0 && moviEnd > moviStart {
+		maxScanBytes := int64(256 << 10)
+		collectBytes := !haveIndex
+		if collectBytes {
+			maxScanBytes = 0
+		}
+		parseAVIMovi(file, moviStart, moviEnd, streams, &videoData, &vopScan, maxScanBytes, collectBytes)
 	}
 
 	if len(streams) == 0 {
@@ -401,12 +430,15 @@ func parseAVIINFO(data []byte) string {
 	return writingApp
 }
 
-func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, videoData *[]byte, vopScan *vopScanner) {
+func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, videoData *[]byte, vopScan *vopScanner, maxScanBytes int64, collectBytes bool) {
 	const aviScanChunk = 256 << 10
 	scanBuf := make([]byte, aviScanChunk)
 	vopScanned := 0
 	offset := start
 	for offset+8 <= end {
+		if maxScanBytes > 0 && offset-start >= maxScanBytes {
+			break
+		}
 		var header [8]byte
 		if _, err := readAt(file, offset, header[:]); err != nil {
 			break
@@ -422,7 +454,9 @@ func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, vi
 			if index, ok := parseAVIStreamIndex(chunkID); ok {
 				if index >= 0 && index < len(streams) {
 					stream := streams[index]
-					stream.bytes += uint64(chunkSize)
+					if collectBytes {
+						stream.bytes += uint64(chunkSize)
+					}
 					if stream.kind == StreamVideo && chunkSize > 0 {
 						needVOP := vopScan != nil && vopScan.bvop == nil && vopScanned < aviMaxVOPScan
 						needVisual := videoData != nil && len(*videoData) < aviMaxVisualScan
@@ -477,6 +511,23 @@ func parseAVIMovi(file io.ReadSeeker, start, end int64, streams []*aviStream, vi
 		pad := chunkSize % 2
 		offset = dataEnd + pad
 	}
+}
+
+func parseAVIIndex(data []byte, streams []*aviStream) bool {
+	found := false
+	pos := 0
+	for pos+16 <= len(data) {
+		id := string(data[pos : pos+4])
+		if index, ok := parseAVIStreamIndex(id); ok {
+			if index >= 0 && index < len(streams) {
+				size := binary.LittleEndian.Uint32(data[pos+12 : pos+16])
+				streams[index].bytes += uint64(size)
+				found = true
+			}
+		}
+		pos += 16
+	}
+	return found
 }
 
 func aviStreamDuration(stream *aviStream, main aviMainHeader) float64 {

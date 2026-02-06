@@ -451,7 +451,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 		}
 	case "AVI":
-		if parsedInfo, parsedStreams, generalFields, ok := ParseAVI(file, stat.Size()); ok {
+		if parsedInfo, parsedStreams, generalFields, ok := ParseAVIWithOptions(file, stat.Size(), opts); ok {
 			info = parsedInfo
 			general.JSON = map[string]string{}
 			for _, field := range generalFields {
