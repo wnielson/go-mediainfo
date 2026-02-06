@@ -326,6 +326,30 @@ func TestVideoProbeNeedsSample(t *testing.T) {
 	}
 }
 
+func TestMatroskaProbesCompleteRequiresParsedAudio(t *testing.T) {
+	audio := map[uint64]*matroskaAudioProbe{
+		1: {format: "AC-3"},
+	}
+	if matroskaProbesComplete(audio, nil) {
+		t.Fatalf("expected unparsed audio probe to be incomplete")
+	}
+
+	audio[1].ok = true
+	if !matroskaProbesComplete(audio, nil) {
+		t.Fatalf("expected parsed AC-3 audio probe to be complete")
+	}
+
+	audio[1] = &matroskaAudioProbe{format: "E-AC-3", ok: true, collect: true}
+	if matroskaProbesComplete(audio, nil) {
+		t.Fatalf("expected collecting E-AC-3 probe to be incomplete")
+	}
+
+	audio[1].collect = false
+	if !matroskaProbesComplete(audio, nil) {
+		t.Fatalf("expected non-collecting E-AC-3 probe to be complete")
+	}
+}
+
 func buildMatroskaSample() []byte {
 	segment := append(
 		buildMatroskaInfo(),

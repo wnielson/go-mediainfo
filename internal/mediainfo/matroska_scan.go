@@ -241,6 +241,9 @@ func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale
 	if size <= 0 {
 		return nil, false
 	}
+	if !applyStats && matroskaProbesComplete(audioProbes, videoProbes) {
+		return nil, false
+	}
 	reader := io.NewSectionReader(r, offset, size)
 	er := newEBMLReader(reader)
 	stats := map[uint64]*matroskaTrackStats{}
@@ -252,7 +255,7 @@ func scanMatroskaClusters(r io.ReaderAt, offset int64, size int64, timecodeScale
 		}
 		switch id {
 		case mkvIDCluster:
-			if err := scanMatroskaCluster(er, int64(elemSize), int64(timecodeScale), stats, audioProbes, videoProbes); err != nil {
+			if err := scanMatroskaCluster(er, int64(elemSize), int64(timecodeScale), stats, audioProbes, videoProbes, applyStats); err != nil {
 				return stats, len(stats) > 0
 			}
 			if !applyStats && matroskaProbesComplete(audioProbes, videoProbes) {
@@ -272,6 +275,9 @@ func matroskaProbesComplete(audioProbes map[uint64]*matroskaAudioProbe, videoPro
 		if probe == nil {
 			continue
 		}
+		if !probe.ok {
+			return false
+		}
 		if probe.collect {
 			return false
 		}
@@ -284,7 +290,7 @@ func matroskaProbesComplete(audioProbes map[uint64]*matroskaAudioProbe, videoPro
 	return true
 }
 
-func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, audioProbes map[uint64]*matroskaAudioProbe, videoProbes map[uint64]*matroskaVideoProbe) error {
+func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats map[uint64]*matroskaTrackStats, audioProbes map[uint64]*matroskaAudioProbe, videoProbes map[uint64]*matroskaVideoProbe, applyStats bool) error {
 	start := er.pos
 	var clusterTimecode int64
 	for er.pos-start < size {
@@ -305,9 +311,15 @@ func scanMatroskaCluster(er *ebmlReader, size int64, timecodeScale int64, stats 
 			if err := scanMatroskaBlock(er, int64(elemSize), clusterTimecode, timecodeScale, stats, audioProbes, videoProbes, 0); err != nil {
 				return err
 			}
+			if !applyStats && matroskaProbesComplete(audioProbes, videoProbes) {
+				return nil
+			}
 		case mkvIDBlockGroup:
 			if err := scanMatroskaBlockGroup(er, int64(elemSize), clusterTimecode, timecodeScale, stats, audioProbes, videoProbes); err != nil {
 				return err
+			}
+			if !applyStats && matroskaProbesComplete(audioProbes, videoProbes) {
+				return nil
 			}
 		default:
 			if err := er.skip(int64(elemSize)); err != nil {
