@@ -259,16 +259,35 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 			}
 		}
 		applyStats := shouldApplyMatroskaClusterStats(opts.ParseSpeed, size, info.tagStats, tagStatsComplete)
-		needsScan := applyStats || len(audioProbes) > 0 || len(videoProbes) > 0
-		if needsScan {
+
+		scanNeeded := applyStats
+		if !scanNeeded {
+			for _, probe := range audioProbes {
+				if probe != nil && (!probe.ok || probe.collect) {
+					scanNeeded = true
+					break
+				}
+			}
+		}
+		if !scanNeeded {
+			for _, probe := range videoProbes {
+				if videoProbeNeedsSample(probe) {
+					scanNeeded = true
+					break
+				}
+			}
+		}
+
+		if scanNeeded {
 			if stats, ok := scanMatroskaClusters(r, info.SegmentOffset, info.SegmentSize, info.TimecodeScale, audioProbes, videoProbes, applyStats); ok {
 				if applyStats {
 					applyMatroskaStats(&info, stats, size)
 				}
-				applyMatroskaAudioProbes(&info, audioProbes)
-				applyMatroskaVideoProbes(&info, videoProbes)
 			}
 		}
+		// Apply probe results even when no Cluster scan was needed (e.g. DEC3 metadata already present).
+		applyMatroskaAudioProbes(&info, audioProbes)
+		applyMatroskaVideoProbes(&info, videoProbes)
 	}
 	return info, true
 }
