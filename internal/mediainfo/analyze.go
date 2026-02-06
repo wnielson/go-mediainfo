@@ -373,40 +373,40 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			})
 		}
 	case "BDAV":
-			if parsedInfo, parsedStreams, generalFields, ok := ParseBDAV(file, stat.Size()); ok {
-				info = parsedInfo
-				general.JSON = map[string]string{}
-				general.JSONRaw = map[string]string{}
+		if parsedInfo, parsedStreams, generalFields, ok := ParseBDAV(file, stat.Size()); ok {
+			info = parsedInfo
+			general.JSON = map[string]string{}
+			general.JSONRaw = map[string]string{}
 			if completeNameLast != "" {
 				general.JSON["FileSize"] = strconv.FormatInt(fileSize, 10)
 			}
 			for _, field := range generalFields {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
-				streams = parsedStreams
-				if id := findField(general.Fields, "ID"); id != "" {
-					if value := extractLeadingNumber(id); value != "" {
-						general.JSON["ID"] = value
-					}
+			streams = parsedStreams
+			if id := findField(general.Fields, "ID"); id != "" {
+				if value := extractLeadingNumber(id); value != "" {
+					general.JSON["ID"] = value
 				}
-				// MediaInfo reports BDAV/M2TS General ID as 0.
-				general.JSON["ID"] = "0"
-				if info.DurationSeconds > 0 {
-					general.JSON["Duration"] = fmt.Sprintf("%.9f", info.DurationSeconds)
-				}
-				// Blu-ray max mux rate (per MediaInfo output).
-				general.JSON["OverallBitRate_Maximum"] = "48000000"
-				// MediaInfo uses a PCR-derived estimate for BDAV overall bitrate.
-				if info.OverallBitrateMin > 0 && info.OverallBitrateMax > 0 {
-					mid := (info.OverallBitrateMin + info.OverallBitrateMax) / 2
-					general.JSON["OverallBitRate"] = strconv.FormatInt(int64(math.Round(mid)), 10)
-				} else {
-					setOverallBitRate(general.JSON, fileSize, info.DurationSeconds)
-				}
-				if info.OverallBitrateMin > 0 && info.OverallBitrateMax > 0 {
-					minRate := int64(math.Round(info.OverallBitrateMin))
-					maxRate := int64(math.Round(info.OverallBitrateMax))
-					general.JSONRaw["extra"] = "{\"OverallBitRate_Precision_Min\":\"" + strconv.FormatInt(minRate, 10) + "\",\"OverallBitRate_Precision_Max\":\"" + strconv.FormatInt(maxRate, 10) + "\"}"
+			}
+			// MediaInfo reports BDAV/M2TS General ID as 0.
+			general.JSON["ID"] = "0"
+			if info.DurationSeconds > 0 {
+				general.JSON["Duration"] = fmt.Sprintf("%.9f", info.DurationSeconds)
+			}
+			// Blu-ray max mux rate (per MediaInfo output).
+			general.JSON["OverallBitRate_Maximum"] = "48000000"
+			// MediaInfo uses a PCR-derived estimate for BDAV overall bitrate.
+			if info.OverallBitrateMin > 0 && info.OverallBitrateMax > 0 {
+				mid := (info.OverallBitrateMin + info.OverallBitrateMax) / 2
+				general.JSON["OverallBitRate"] = strconv.FormatInt(int64(math.Round(mid)), 10)
+			} else {
+				setOverallBitRate(general.JSON, fileSize, info.DurationSeconds)
+			}
+			if info.OverallBitrateMin > 0 && info.OverallBitrateMax > 0 {
+				minRate := int64(math.Round(info.OverallBitrateMin))
+				maxRate := int64(math.Round(info.OverallBitrateMax))
+				general.JSONRaw["extra"] = "{\"OverallBitRate_Precision_Min\":\"" + strconv.FormatInt(minRate, 10) + "\",\"OverallBitRate_Precision_Max\":\"" + strconv.FormatInt(maxRate, 10) + "\"}"
 			}
 			applyX264Info(file, streams, x264InfoOptions{
 				addNominalBitrate: true,
@@ -429,40 +429,40 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 					}
 					_ = f.Close()
 				}
-					if lastInfo.DurationSeconds > 0 {
-						info.DurationSeconds = lastInfo.DurationSeconds
-						general.JSON["Duration"] = fmt.Sprintf("%.9f", info.DurationSeconds)
-						// MediaInfo continuous-file behavior: total FileSize, but bitrate correction based on the last file's PCR-derived bitrate.
-						if lastSize > 0 && fileSize > lastSize && lastInfo.OverallBitrateMin > 0 && lastInfo.OverallBitrateMax > 0 && info.DurationSeconds > 0 {
-							lastMid := (lastInfo.OverallBitrateMin + lastInfo.OverallBitrateMax) / 2
-							lastMidRounded := float64(int64(math.Round(lastMid)))
-							overall := (float64(fileSize-lastSize) * 8 / info.DurationSeconds) + lastMidRounded
-							overallRounded := int64(math.Round(overall))
-							general.JSON["OverallBitRate"] = strconv.FormatInt(overallRounded, 10)
-							// MediaInfo continuous output exposes a very tight precision range.
-							textCount := 0
-							for _, s := range streams {
-								if s.Kind == StreamText {
-									textCount++
-								}
+				if lastInfo.DurationSeconds > 0 {
+					info.DurationSeconds = lastInfo.DurationSeconds
+					general.JSON["Duration"] = fmt.Sprintf("%.9f", info.DurationSeconds)
+					// MediaInfo continuous-file behavior: total FileSize, but bitrate correction based on the last file's PCR-derived bitrate.
+					if lastSize > 0 && fileSize > lastSize && lastInfo.OverallBitrateMin > 0 && lastInfo.OverallBitrateMax > 0 && info.DurationSeconds > 0 {
+						lastMid := (lastInfo.OverallBitrateMin + lastInfo.OverallBitrateMax) / 2
+						lastMidRounded := float64(int64(math.Round(lastMid)))
+						overall := (float64(fileSize-lastSize) * 8 / info.DurationSeconds) + lastMidRounded
+						overallRounded := int64(math.Round(overall))
+						general.JSON["OverallBitRate"] = strconv.FormatInt(overallRounded, 10)
+						// MediaInfo continuous output exposes a very tight precision range.
+						textCount := 0
+						for _, s := range streams {
+							if s.Kind == StreamText {
+								textCount++
 							}
-							denom := int64(9600)
-							if textCount > 0 {
-								denom = int64(960 * textCount)
-							}
-							lastMidInt := int64(lastMidRounded)
-							precision := float64(lastMidInt) / float64(denom)
-							// MediaInfo uses ceil() when serializing these float-based bounds.
-							minRate := int64(math.Ceil(float64(overallRounded) - precision))
-							maxRate := int64(math.Ceil(float64(overallRounded) + precision))
-							general.JSONRaw["extra"] = "{\"OverallBitRate_Precision_Min\":\"" + strconv.FormatInt(minRate, 10) + "\",\"OverallBitRate_Precision_Max\":\"" + strconv.FormatInt(maxRate, 10) + "\"}"
-						} else {
-							setOverallBitRate(general.JSON, fileSize, info.DurationSeconds)
 						}
-						// Override per-stream JSON durations to match MediaInfo's continuous file behavior.
-						var lastVideoDuration string
-						var lastVideoFrameCount string
-						for _, s := range lastStreams {
+						denom := int64(9600)
+						if textCount > 0 {
+							denom = int64(960 * textCount)
+						}
+						lastMidInt := int64(lastMidRounded)
+						precision := float64(lastMidInt) / float64(denom)
+						// MediaInfo uses ceil() when serializing these float-based bounds.
+						minRate := int64(math.Ceil(float64(overallRounded) - precision))
+						maxRate := int64(math.Ceil(float64(overallRounded) + precision))
+						general.JSONRaw["extra"] = "{\"OverallBitRate_Precision_Min\":\"" + strconv.FormatInt(minRate, 10) + "\",\"OverallBitRate_Precision_Max\":\"" + strconv.FormatInt(maxRate, 10) + "\"}"
+					} else {
+						setOverallBitRate(general.JSON, fileSize, info.DurationSeconds)
+					}
+					// Override per-stream JSON durations to match MediaInfo's continuous file behavior.
+					var lastVideoDuration string
+					var lastVideoFrameCount string
+					for _, s := range lastStreams {
 						if s.Kind != StreamVideo || s.JSON == nil {
 							continue
 						}

@@ -31,4 +31,3 @@ func TestParsePCR27(t *testing.T) {
 		t.Fatalf("parsePCR27: got=%d want=%d", got, want)
 	}
 }
-

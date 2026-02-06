@@ -170,29 +170,29 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			payloadStart := ts[1]&0x40 != 0
 			adaptation := (ts[3] & 0x30) >> 4
 			payloadIndex := 4
-				if adaptation == 2 || adaptation == 3 {
-					adaptationLen := int(ts[4])
-					payloadIndex += 1 + adaptationLen
-				}
-				if pid == pcrPID {
-					if pcr27, ok := parsePCR27(ts); ok {
-						pcrFull.add(pcr27)
-						// Keep legacy 90kHz PCR base for fields/flows that expect it.
-						pcrPTS.add(pcr27 / 300)
-						if hasPCR && pcr27 > lastPCR && packetIndex > lastPCRPacket {
-							delta := pcr27 - lastPCR
-							seconds := float64(delta) / 27000000.0
-							if seconds > 0 {
-								bytesBetween := (packetIndex - lastPCRPacket) * packetSize
-								pcrBits += float64(bytesBetween * 8)
-								pcrSeconds += seconds
-							}
+			if adaptation == 2 || adaptation == 3 {
+				adaptationLen := int(ts[4])
+				payloadIndex += 1 + adaptationLen
+			}
+			if pid == pcrPID {
+				if pcr27, ok := parsePCR27(ts); ok {
+					pcrFull.add(pcr27)
+					// Keep legacy 90kHz PCR base for fields/flows that expect it.
+					pcrPTS.add(pcr27 / 300)
+					if hasPCR && pcr27 > lastPCR && packetIndex > lastPCRPacket {
+						delta := pcr27 - lastPCR
+						seconds := float64(delta) / 27000000.0
+						if seconds > 0 {
+							bytesBetween := (packetIndex - lastPCRPacket) * packetSize
+							pcrBits += float64(bytesBetween * 8)
+							pcrSeconds += seconds
 						}
-						lastPCR = pcr27
-						lastPCRPacket = packetIndex
-						hasPCR = true
 					}
+					lastPCR = pcr27
+					lastPCRPacket = packetIndex
+					hasPCR = true
 				}
+			}
 			if adaptation == 2 {
 				continue
 			}
@@ -469,17 +469,17 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 	var streamsOut []Stream
 	videoDuration := ptsDuration(videoPTS)
 	for i, pid := range streamOrder {
-			st, ok := streams[pid]
-			if !ok {
-				continue
-			}
-			jsonExtras := map[string]string{}
-			var jsonRaw map[string]string
-			jsonExtras["ID"] = strconv.FormatUint(uint64(st.pid), 10)
-			jsonExtras["StreamOrder"] = fmt.Sprintf("0-%d", i)
-			if isBDAV && st.bytes > 0 && (st.kind == StreamVideo || st.kind == StreamAudio) {
-				jsonExtras["StreamSize"] = strconv.FormatUint(st.bytes, 10)
-			}
+		st, ok := streams[pid]
+		if !ok {
+			continue
+		}
+		jsonExtras := map[string]string{}
+		var jsonRaw map[string]string
+		jsonExtras["ID"] = strconv.FormatUint(uint64(st.pid), 10)
+		jsonExtras["StreamOrder"] = fmt.Sprintf("0-%d", i)
+		if isBDAV && st.bytes > 0 && (st.kind == StreamVideo || st.kind == StreamAudio) {
+			jsonExtras["StreamSize"] = strconv.FormatUint(st.bytes, 10)
+		}
 		if st.programNumber > 0 {
 			jsonExtras["MenuID"] = strconv.FormatUint(uint64(st.programNumber), 10)
 		}
@@ -570,32 +570,32 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				fields = append(fields, Field{Name: "Display aspect ratio", Value: ar})
 			}
 		}
-			if st.kind == StreamAudio {
-				duration := ptsDuration(st.pts)
-				if st.audioRate > 0 && st.audioFrames > 0 && st.audioSpf > 0 {
-					rate := int64(st.audioRate)
-					if rate > 0 {
-						samples := st.audioFrames * uint64(st.audioSpf)
-						durationMs := int64((samples * 1000) / uint64(rate))
-						duration = float64(durationMs) / 1000.0
-					}
+		if st.kind == StreamAudio {
+			duration := ptsDuration(st.pts)
+			if st.audioRate > 0 && st.audioFrames > 0 && st.audioSpf > 0 {
+				rate := int64(st.audioRate)
+				if rate > 0 {
+					samples := st.audioFrames * uint64(st.audioSpf)
+					durationMs := int64((samples * 1000) / uint64(rate))
+					duration = float64(durationMs) / 1000.0
 				}
-				if duration > 0 {
-					fields = addStreamDuration(fields, duration)
-					if isBDAV {
-						jsonExtras["Duration"] = fmt.Sprintf("%.3f", duration)
-					}
+			}
+			if duration > 0 {
+				fields = addStreamDuration(fields, duration)
+				if isBDAV {
+					jsonExtras["Duration"] = fmt.Sprintf("%.3f", duration)
 				}
+			}
 
-				if st.audioRate > 0 && st.audioChannels > 0 {
-					mode := st.audioBitRateMode
-					if mode == "" {
-						mode = "Variable"
-					}
-					fields = append(fields, Field{Name: "Bit rate mode", Value: mode})
-					if st.audioBitRateKbps > 0 {
-						fields = append(fields, Field{Name: "Bit rate", Value: formatBitrate(float64(st.audioBitRateKbps) * 1000)})
-					}
+			if st.audioRate > 0 && st.audioChannels > 0 {
+				mode := st.audioBitRateMode
+				if mode == "" {
+					mode = "Variable"
+				}
+				fields = append(fields, Field{Name: "Bit rate mode", Value: mode})
+				if st.audioBitRateKbps > 0 {
+					fields = append(fields, Field{Name: "Bit rate", Value: formatBitrate(float64(st.audioBitRateKbps) * 1000)})
+				}
 				fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(st.audioChannels)})
 				if layout := channelLayout(st.audioChannels); layout != "" {
 					fields = append(fields, Field{Name: "Channel layout", Value: layout})
@@ -606,82 +606,82 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 					fields = append(fields, Field{Name: "Frame rate", Value: fmt.Sprintf("%.3f FPS (%d SPF)", frameRate, st.audioSpf)})
 				}
 				fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
-					if videoPTS.has() && st.pts.has() {
-						delay := float64(int64(st.pts.min)-int64(videoPTS.min)) * 1000 / 90000.0
-						fields = append(fields, Field{Name: "Delay relative to video", Value: fmt.Sprintf("%d ms", int64(math.Round(delay)))})
-					}
-				}
-
-				if st.hasAC3 {
-					// Match MediaInfo's extra AC-3 metadata fields for TS/BDAV.
-					jsonExtras["Format_Settings_Endianness"] = "Big"
-					if st.format == "AC-3" {
-						jsonExtras["Format_Commercial_IfAny"] = "Dolby Digital"
-					} else if st.format == "E-AC-3" {
-						jsonExtras["Format_Commercial_IfAny"] = "Dolby Digital Plus"
-					}
-					if st.ac3Info.spf > 0 {
-						jsonExtras["SamplesPerFrame"] = strconv.Itoa(st.ac3Info.spf)
-					}
-					if st.ac3Info.sampleRate > 0 && duration > 0 {
-						samplingCount := int64(math.Round(duration * st.ac3Info.sampleRate))
-						if samplingCount > 0 {
-							jsonExtras["SamplingCount"] = strconv.FormatInt(samplingCount, 10)
-						}
-					}
-					if code := ac3ServiceKindCode(st.ac3Info.bsmod); code != "" {
-						jsonExtras["ServiceKind"] = code
-					}
-
-					extraFields := []jsonKV{
-						{Key: "format_identifier", Val: st.format},
-					}
-					if st.ac3Info.bsid > 0 {
-						extraFields = append(extraFields, jsonKV{Key: "bsid", Val: strconv.Itoa(st.ac3Info.bsid)})
-					}
-					if st.ac3Info.hasDialnorm {
-						extraFields = append(extraFields, jsonKV{Key: "dialnorm", Val: strconv.Itoa(st.ac3Info.dialnorm)})
-					}
-					if st.ac3Info.hasCompr {
-						extraFields = append(extraFields, jsonKV{Key: "compr", Val: fmt.Sprintf("%.2f", st.ac3Info.comprDB)})
-					}
-					if st.ac3Info.hasDynrng {
-						extraFields = append(extraFields, jsonKV{Key: "dynrng", Val: fmt.Sprintf("%.2f", st.ac3Info.dynrngDB)})
-					}
-					if st.ac3Info.acmod > 0 {
-						extraFields = append(extraFields, jsonKV{Key: "acmod", Val: strconv.Itoa(st.ac3Info.acmod)})
-					}
-					if st.ac3Info.hasDsurmod {
-						extraFields = append(extraFields, jsonKV{Key: "dsurmod", Val: strconv.Itoa(st.ac3Info.dsurmod)})
-					}
-					if st.ac3Info.lfeon >= 0 {
-						extraFields = append(extraFields, jsonKV{Key: "lfeon", Val: strconv.Itoa(st.ac3Info.lfeon)})
-					}
-					if avg, minVal, maxVal, ok := st.ac3Info.dialnormStats(); ok {
-						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Average", Val: strconv.Itoa(avg)})
-						extraFields = append(extraFields, jsonKV{Key: "dialnorm_Minimum", Val: strconv.Itoa(minVal)})
-						_ = maxVal
-					}
-					if avg, minVal, maxVal, count, ok := st.ac3Info.comprStats(); ok {
-						extraFields = append(extraFields, jsonKV{Key: "compr_Average", Val: fmt.Sprintf("%.2f", avg)})
-						extraFields = append(extraFields, jsonKV{Key: "compr_Minimum", Val: fmt.Sprintf("%.2f", minVal)})
-						extraFields = append(extraFields, jsonKV{Key: "compr_Maximum", Val: fmt.Sprintf("%.2f", maxVal)})
-						extraFields = append(extraFields, jsonKV{Key: "compr_Count", Val: strconv.Itoa(count)})
-					}
-					if avg, minVal, maxVal, count, ok := st.ac3Info.dynrngStats(); ok {
-						extraFields = append(extraFields, jsonKV{Key: "dynrng_Average", Val: fmt.Sprintf("%.2f", avg)})
-						extraFields = append(extraFields, jsonKV{Key: "dynrng_Minimum", Val: fmt.Sprintf("%.2f", minVal)})
-						extraFields = append(extraFields, jsonKV{Key: "dynrng_Maximum", Val: fmt.Sprintf("%.2f", maxVal)})
-						extraFields = append(extraFields, jsonKV{Key: "dynrng_Count", Val: strconv.Itoa(count)})
-					}
-					if len(extraFields) > 0 {
-						if jsonRaw == nil {
-							jsonRaw = map[string]string{}
-						}
-						jsonRaw["extra"] = renderJSONObject(extraFields, false)
-					}
+				if videoPTS.has() && st.pts.has() {
+					delay := float64(int64(st.pts.min)-int64(videoPTS.min)) * 1000 / 90000.0
+					fields = append(fields, Field{Name: "Delay relative to video", Value: fmt.Sprintf("%d ms", int64(math.Round(delay)))})
 				}
 			}
+
+			if st.hasAC3 {
+				// Match MediaInfo's extra AC-3 metadata fields for TS/BDAV.
+				jsonExtras["Format_Settings_Endianness"] = "Big"
+				if st.format == "AC-3" {
+					jsonExtras["Format_Commercial_IfAny"] = "Dolby Digital"
+				} else if st.format == "E-AC-3" {
+					jsonExtras["Format_Commercial_IfAny"] = "Dolby Digital Plus"
+				}
+				if st.ac3Info.spf > 0 {
+					jsonExtras["SamplesPerFrame"] = strconv.Itoa(st.ac3Info.spf)
+				}
+				if st.ac3Info.sampleRate > 0 && duration > 0 {
+					samplingCount := int64(math.Round(duration * st.ac3Info.sampleRate))
+					if samplingCount > 0 {
+						jsonExtras["SamplingCount"] = strconv.FormatInt(samplingCount, 10)
+					}
+				}
+				if code := ac3ServiceKindCode(st.ac3Info.bsmod); code != "" {
+					jsonExtras["ServiceKind"] = code
+				}
+
+				extraFields := []jsonKV{
+					{Key: "format_identifier", Val: st.format},
+				}
+				if st.ac3Info.bsid > 0 {
+					extraFields = append(extraFields, jsonKV{Key: "bsid", Val: strconv.Itoa(st.ac3Info.bsid)})
+				}
+				if st.ac3Info.hasDialnorm {
+					extraFields = append(extraFields, jsonKV{Key: "dialnorm", Val: strconv.Itoa(st.ac3Info.dialnorm)})
+				}
+				if st.ac3Info.hasCompr {
+					extraFields = append(extraFields, jsonKV{Key: "compr", Val: fmt.Sprintf("%.2f", st.ac3Info.comprDB)})
+				}
+				if st.ac3Info.hasDynrng {
+					extraFields = append(extraFields, jsonKV{Key: "dynrng", Val: fmt.Sprintf("%.2f", st.ac3Info.dynrngDB)})
+				}
+				if st.ac3Info.acmod > 0 {
+					extraFields = append(extraFields, jsonKV{Key: "acmod", Val: strconv.Itoa(st.ac3Info.acmod)})
+				}
+				if st.ac3Info.hasDsurmod {
+					extraFields = append(extraFields, jsonKV{Key: "dsurmod", Val: strconv.Itoa(st.ac3Info.dsurmod)})
+				}
+				if st.ac3Info.lfeon >= 0 {
+					extraFields = append(extraFields, jsonKV{Key: "lfeon", Val: strconv.Itoa(st.ac3Info.lfeon)})
+				}
+				if avg, minVal, maxVal, ok := st.ac3Info.dialnormStats(); ok {
+					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Average", Val: strconv.Itoa(avg)})
+					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Minimum", Val: strconv.Itoa(minVal)})
+					_ = maxVal
+				}
+				if avg, minVal, maxVal, count, ok := st.ac3Info.comprStats(); ok {
+					extraFields = append(extraFields, jsonKV{Key: "compr_Average", Val: fmt.Sprintf("%.2f", avg)})
+					extraFields = append(extraFields, jsonKV{Key: "compr_Minimum", Val: fmt.Sprintf("%.2f", minVal)})
+					extraFields = append(extraFields, jsonKV{Key: "compr_Maximum", Val: fmt.Sprintf("%.2f", maxVal)})
+					extraFields = append(extraFields, jsonKV{Key: "compr_Count", Val: strconv.Itoa(count)})
+				}
+				if avg, minVal, maxVal, count, ok := st.ac3Info.dynrngStats(); ok {
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Average", Val: fmt.Sprintf("%.2f", avg)})
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Minimum", Val: fmt.Sprintf("%.2f", minVal)})
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Maximum", Val: fmt.Sprintf("%.2f", maxVal)})
+					extraFields = append(extraFields, jsonKV{Key: "dynrng_Count", Val: strconv.Itoa(count)})
+				}
+				if len(extraFields) > 0 {
+					if jsonRaw == nil {
+						jsonRaw = map[string]string{}
+					}
+					jsonRaw["extra"] = renderJSONObject(extraFields, false)
+				}
+			}
+		}
 		if st.kind == StreamText && st.streamType != 0 {
 			fields = append(fields, Field{Name: "Codec ID", Value: formatTSCodecID(st.streamType)})
 		}
@@ -696,8 +696,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				}
 			}
 		}
-			streamsOut = append(streamsOut, Stream{Kind: st.kind, Fields: fields, JSON: jsonExtras, JSONRaw: jsonRaw})
-		}
+		streamsOut = append(streamsOut, Stream{Kind: st.kind, Fields: fields, JSON: jsonExtras, JSONRaw: jsonRaw})
+	}
 
 	info := ContainerInfo{}
 	if pcrSeconds > 0 && pcrBits > 0 && size > 0 {
