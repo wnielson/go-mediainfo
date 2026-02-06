@@ -88,9 +88,9 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 	base := filepath.Base(path)
 	ext := strings.ToLower(filepath.Ext(base))
 	isBUP := ext == ".bup"
-	isIFO := ext == ".ifo"
-	inVideoTS := strings.EqualFold(filepath.Base(filepath.Dir(path)), "VIDEO_TS")
-	aggregateMode := isVTS && inVideoTS && isIFO
+	// MediaInfo reports VTS IFO files from IFO metadata; it does not aggregate
+	// payload details by scanning sibling VOB files.
+	aggregateMode := false
 	programMode := !aggregateMode
 
 	var videoAttrs dvdVideoAttrs
@@ -248,7 +248,7 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 			videoFields = append(videoFields, Field{Name: "Standard", Value: videoAttrs.Standard})
 		}
 		videoFields = append(videoFields, Field{Name: "Compression mode", Value: "Lossy"})
-		if isVTS && !isBUP {
+		if aggregateMode && isVTS && !isBUP {
 			if source := dvdTitleSetSource(base); source != "" {
 				videoFields = append(videoFields, Field{Name: "Source", Value: source})
 			}
@@ -277,7 +277,11 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 			for i, audio := range audioAttrs {
 				audioFields := []Field{}
 				if isVTS {
-					audioFields = append(audioFields, Field{Name: "ID", Value: fmt.Sprintf("189 (0xBD)-%d (0x%X)", 128+i, 0x80+i)})
+					if aggregateMode {
+						audioFields = append(audioFields, Field{Name: "ID", Value: fmt.Sprintf("189 (0xBD)-%d (0x%X)", 128+i, 0x80+i)})
+					} else {
+						audioFields = append(audioFields, Field{Name: "ID", Value: fmt.Sprintf("%d (0x%X)", 128+i, 0x80+i)})
+					}
 				}
 				if audio.Format != "" {
 					audioFields = append(audioFields, Field{Name: "Format", Value: audio.Format})
@@ -299,7 +303,7 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 				if audio.Language != "" && !suppressLanguage {
 					audioFields = append(audioFields, Field{Name: "Language", Value: audio.Language})
 				}
-				if isVTS && !isBUP {
+				if aggregateMode && isVTS && !isBUP {
 					if source := dvdTitleSetSource(base); source != "" {
 						audioFields = append(audioFields, Field{Name: "Source", Value: source})
 					}
@@ -316,7 +320,11 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 					audioStream.JSON["Language"] = audio.LanguageCode
 				}
 				if isVTS {
-					audioStream.JSON["ID"] = fmt.Sprintf("189-%d", 128+i)
+					if aggregateMode {
+						audioStream.JSON["ID"] = fmt.Sprintf("189-%d", 128+i)
+					} else {
+						audioStream.JSON["ID"] = strconv.Itoa(128 + i)
+					}
 				}
 				streams = append(streams, audioStream)
 			}
@@ -326,7 +334,11 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 			for i, subpic := range subpicAttrs {
 				textFields := []Field{}
 				if isVTS {
-					textFields = append(textFields, Field{Name: "ID", Value: fmt.Sprintf("189 (0xBD)-%d (0x%X)", 32+i, 0x20+i)})
+					if aggregateMode {
+						textFields = append(textFields, Field{Name: "ID", Value: fmt.Sprintf("189 (0xBD)-%d (0x%X)", 32+i, 0x20+i)})
+					} else {
+						textFields = append(textFields, Field{Name: "ID", Value: fmt.Sprintf("%d (0x%X)", 32+i, 0x20+i)})
+					}
 				}
 				textFields = append(textFields, Field{Name: "Format", Value: "RLE"})
 				textFields = append(textFields, Field{Name: "Format/Info", Value: "Run-length encoding"})
@@ -345,7 +357,11 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 					textStream.JSON["Language"] = subpic.LanguageCode
 				}
 				if isVTS {
-					textStream.JSON["ID"] = fmt.Sprintf("189-%d", 32+i)
+					if aggregateMode {
+						textStream.JSON["ID"] = fmt.Sprintf("189-%d", 32+i)
+					} else {
+						textStream.JSON["ID"] = strconv.Itoa(32 + i)
+					}
 				}
 				streams = append(streams, textStream)
 			}
@@ -366,7 +382,7 @@ func parseDVDVideo(path string, file *os.File, size int64, opts AnalyzeOptions) 
 			menuFields = append(menuFields, Field{Name: "  Letterbox)", Value: dvdIndexList(len(subpicAttrs))})
 			menuFields = append(menuFields, Field{Name: "  Pan&Scan)", Value: dvdZeroList(len(subpicAttrs))})
 		}
-		if isVTS && !isBUP {
+		if aggregateMode && isVTS && !isBUP {
 			if source := dvdTitleSetSource(base); source != "" {
 				menuFields = append(menuFields, Field{Name: "Source", Value: source})
 			}
