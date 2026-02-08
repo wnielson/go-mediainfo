@@ -1249,6 +1249,75 @@ func applyMatroskaAudioProbes(info *MatroskaInfo, probes map[uint64]*matroskaAud
 	}
 }
 
+func deriveCBRAudioStreamSizes(info *MatroskaInfo, fileSize int64) {
+	if info == nil || len(info.Tracks) == 0 {
+		return
+	}
+	for i := range info.Tracks {
+		stream := &info.Tracks[i]
+		if stream.Kind != StreamAudio {
+			continue
+		}
+		// Only fill missing StreamSize for constant-bitrate audio. Official mediainfo often omits
+		// StreamSize for VBR tracks even when Statistics Tags are present.
+		if findField(stream.Fields, "Stream size") != "" {
+			continue
+		}
+		if stream.JSON != nil && stream.JSON["StreamSize"] != "" {
+			continue
+		}
+		cbr := findField(stream.Fields, "Bit rate mode") == "Constant"
+		if !cbr && stream.JSON != nil && stream.JSON["BitRate_Mode"] == "CBR" {
+			cbr = true
+		}
+		if !cbr {
+			continue
+		}
+		br := int64(0)
+		if stream.JSON != nil {
+			if parsed, ok := parseInt(stream.JSON["BitRate"]); ok && parsed > 0 {
+				br = parsed
+			}
+		}
+		if br <= 0 {
+			if parsed, ok := parseBitrateBps(findField(stream.Fields, "Bit rate")); ok && parsed > 0 {
+				br = parsed
+			}
+		}
+		if br <= 0 {
+			continue
+		}
+		durSec := 0.0
+		if stream.JSON != nil && stream.JSON["Duration"] != "" {
+			if parsed, err := strconv.ParseFloat(stream.JSON["Duration"], 64); err == nil && parsed > 0 {
+				durSec = parsed
+			}
+		}
+		if durSec <= 0 {
+			if parsed, ok := parseDurationSeconds(findField(stream.Fields, "Duration")); ok && parsed > 0 {
+				durSec = parsed
+			}
+		}
+		if durSec <= 0 {
+			continue
+		}
+		// MediaInfo uses integer milliseconds for this calculation.
+		durationMs := int64(math.Round(durSec * 1000))
+		if durationMs <= 0 {
+			continue
+		}
+		bytes := int64(math.Round(float64(br) * float64(durationMs) / 8000.0))
+		if bytes <= 0 {
+			continue
+		}
+		stream.Fields = setFieldValue(stream.Fields, "Stream size", formatStreamSize(bytes, fileSize))
+		if stream.JSON == nil {
+			stream.JSON = map[string]string{}
+		}
+		stream.JSON["StreamSize"] = strconv.FormatInt(bytes, 10)
+	}
+}
+
 func applyMatroskaVideoProbes(info *MatroskaInfo, probes map[uint64]*matroskaVideoProbe) {
 	if len(probes) == 0 {
 		return

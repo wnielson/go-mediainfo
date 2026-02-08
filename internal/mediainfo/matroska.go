@@ -373,6 +373,7 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 			}
 		}
 	}
+	deriveCBRAudioStreamSizes(&info, size)
 	return info, true
 }
 
