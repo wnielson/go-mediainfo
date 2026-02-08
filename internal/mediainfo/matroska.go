@@ -227,6 +227,12 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 		}
 		if (len(info.tagStats) == 0 || needEncoders) && size > scanSize {
 			encodedDate := findField(info.General, "Encoded date")
+			var tagEncoders map[uint64]string
+			var tagSettings map[uint64]string
+			var tagLangs map[uint64]string
+			var tagStats map[uint64]matroskaTagStats
+
+			// Prefer SeekHead for a precise offset, but some files omit Tags entries.
 			if seekPos, ok := findMatroskaSeekPosition(buf, int(info.SegmentOffset), mkvIDTags); ok {
 				tagsOffset := info.SegmentOffset + int64(seekPos)
 				if tagsOffset > 0 && tagsOffset < size {
@@ -234,23 +240,41 @@ func ParseMatroskaWithOptions(r io.ReaderAt, size int64, opts AnalyzeOptions) (M
 					if tagsSize > 0 {
 						tagsBuf := make([]byte, tagsSize)
 						if _, err := r.ReadAt(tagsBuf, tagsOffset); err == nil || err == io.EOF {
-							encodersByTrackUID, settingsByTrackUID, stats := parseMatroskaTagsFromBuffer(tagsBuf, encodedDate)
-							if len(stats) > 0 {
-								if info.tagStats == nil {
-									info.tagStats = map[uint64]matroskaTagStats{}
-								}
-								for uid, st := range stats {
-									current := info.tagStats[uid]
-									mergeMatroskaTagStats(&current, st)
-									info.tagStats[uid] = current
-								}
-							}
-							if (len(encodersByTrackUID) > 0 || len(settingsByTrackUID) > 0) && len(info.Tracks) > 0 {
-								applyMatroskaEncoders(info.Tracks, encodersByTrackUID, settingsByTrackUID)
-							}
+							tagEncoders, tagSettings, tagLangs, tagStats = parseMatroskaTagsFromBuffer(tagsBuf, encodedDate)
 						}
 					}
 				}
+			} else {
+				// Fallback: scan a slightly larger prefix for the Tags element ID and parse in-memory.
+				headSize := min(size, int64(16<<20))
+				if headSize > 0 {
+					head := buf
+					if int64(len(head)) < headSize {
+						head = make([]byte, headSize)
+						copy(head, buf)
+						if _, err := r.ReadAt(head[int64(len(buf)):], int64(len(buf))); err != nil && err != io.EOF {
+							head = buf
+						}
+					}
+					tagEncoders, tagSettings, tagLangs, tagStats = parseMatroskaTagsFromBuffer(head, encodedDate)
+				}
+			}
+
+			if len(tagStats) > 0 {
+				if info.tagStats == nil {
+					info.tagStats = map[uint64]matroskaTagStats{}
+				}
+				for uid, st := range tagStats {
+					current := info.tagStats[uid]
+					mergeMatroskaTagStats(&current, st)
+					info.tagStats[uid] = current
+				}
+			}
+			if (len(tagEncoders) > 0 || len(tagSettings) > 0) && len(info.Tracks) > 0 {
+				applyMatroskaEncoders(info.Tracks, tagEncoders, tagSettings)
+			}
+			if len(tagLangs) > 0 && len(info.Tracks) > 0 {
+				applyMatroskaTagLanguages(info.Tracks, tagLangs)
 			}
 		}
 		tagStatsComplete := false
@@ -511,6 +535,7 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 	info := MatroskaInfo{}
 	encodersByTrackUID := map[uint64]string{}
 	settingsByTrackUID := map[uint64]string{}
+	langsByTrackUID := map[uint64]string{}
 	statsByTrackUID := map[uint64]matroskaTagStats{}
 	var segmentFields []Field
 	var chaptersPayloads [][]byte
@@ -548,7 +573,7 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 		}
 		if id == mkvIDTags {
 			encodedDate := findField(info.General, "Encoded date")
-			tagEncoders, tagSettings, tagStats := parseMatroskaTags(buf[dataStart:dataEnd], encodedDate)
+			tagEncoders, tagSettings, tagLangs, tagStats := parseMatroskaTags(buf[dataStart:dataEnd], encodedDate)
 			for uid, enc := range tagEncoders {
 				if enc != "" {
 					encodersByTrackUID[uid] = enc
@@ -557,6 +582,11 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 			for uid, settings := range tagSettings {
 				if settings != "" {
 					settingsByTrackUID[uid] = settings
+				}
+			}
+			for uid, lang := range tagLangs {
+				if lang != "" && langsByTrackUID[uid] == "" {
+					langsByTrackUID[uid] = lang
 				}
 			}
 			for trackUID, stat := range tagStats {
@@ -577,6 +607,9 @@ func parseMatroskaSegment(buf []byte) (MatroskaInfo, bool) {
 	}
 	if (len(encodersByTrackUID) > 0 || len(settingsByTrackUID) > 0) && len(info.Tracks) > 0 {
 		applyMatroskaEncoders(info.Tracks, encodersByTrackUID, settingsByTrackUID)
+	}
+	if len(langsByTrackUID) > 0 && len(info.Tracks) > 0 {
+		applyMatroskaTagLanguages(info.Tracks, langsByTrackUID)
 	}
 	if len(segmentFields) > 0 {
 		info.General = append(info.General, segmentFields...)
@@ -1453,6 +1486,11 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64) (Stream, bool)
 				jsonExtras["transfer_characteristics"] = videoInfo.transferCharacteristics
 				jsonExtras["transfer_characteristics_Source"] = matroskaColorSource(videoInfo.transferSource, colorSource)
 			}
+			// MediaInfo JSON sometimes includes transfer_characteristics_Source even when the value itself
+			// is absent (e.g. BT.709 defaults). Only do this when stream color metadata is present.
+			if strings.Contains(colorSource, "Stream") && jsonExtras["transfer_characteristics_Source"] == "" {
+				jsonExtras["transfer_characteristics_Source"] = matroskaColorSource(videoInfo.transferSource, colorSource)
+			}
 			if videoInfo.matrixCoefficients != "" {
 				jsonExtras["matrix_coefficients"] = videoInfo.matrixCoefficients
 				jsonExtras["matrix_coefficients_Source"] = matroskaColorSource(videoInfo.matrixSource, colorSource)
@@ -2100,9 +2138,10 @@ func matroskaColorSource(value string, fallback string) string {
 	return fallback
 }
 
-func parseMatroskaTags(buf []byte, encodedDate string) (map[uint64]string, map[uint64]string, map[uint64]matroskaTagStats) {
+func parseMatroskaTags(buf []byte, encodedDate string) (map[uint64]string, map[uint64]string, map[uint64]string, map[uint64]matroskaTagStats) {
 	encodersByTrackUID := map[uint64]string{}
 	settingsByTrackUID := map[uint64]string{}
+	langsByTrackUID := map[uint64]string{}
 	statsByTrackUID := map[uint64]matroskaTagStats{}
 	pos := 0
 	for pos < len(buf) {
@@ -2121,6 +2160,11 @@ func parseMatroskaTags(buf []byte, encodedDate string) (map[uint64]string, map[u
 		}
 		if id == mkvIDTag {
 			trackUID, tags := parseMatroskaTag(buf[dataStart:dataEnd])
+			if trackUID > 0 {
+				if lang, ok := tags["LANGUAGE"]; ok && lang != "" && langsByTrackUID[trackUID] == "" {
+					langsByTrackUID[trackUID] = strings.TrimSpace(lang)
+				}
+			}
 			if encoder, ok := tags["ENCODER"]; ok && encoder != "" {
 				key := trackUID
 				if key == 0 {
@@ -2149,12 +2193,13 @@ func parseMatroskaTags(buf []byte, encodedDate string) (map[uint64]string, map[u
 		}
 		pos = dataEnd
 	}
-	return encodersByTrackUID, settingsByTrackUID, statsByTrackUID
+	return encodersByTrackUID, settingsByTrackUID, langsByTrackUID, statsByTrackUID
 }
 
-func parseMatroskaTagsFromBuffer(buf []byte, encodedDate string) (map[uint64]string, map[uint64]string, map[uint64]matroskaTagStats) {
+func parseMatroskaTagsFromBuffer(buf []byte, encodedDate string) (map[uint64]string, map[uint64]string, map[uint64]string, map[uint64]matroskaTagStats) {
 	encodersByTrackUID := map[uint64]string{}
 	settingsByTrackUID := map[uint64]string{}
+	langsByTrackUID := map[uint64]string{}
 	statsByTrackUID := map[uint64]matroskaTagStats{}
 	pattern := []byte{0x12, 0x54, 0xC3, 0x67}
 	searchPos := 0
@@ -2175,7 +2220,7 @@ func parseMatroskaTagsFromBuffer(buf []byte, encodedDate string) (map[uint64]str
 			searchPos = start + 1
 			continue
 		}
-		tagEncoders, tagSettings, tagStats := parseMatroskaTags(buf[dataStart:dataEnd], encodedDate)
+		tagEncoders, tagSettings, tagLangs, tagStats := parseMatroskaTags(buf[dataStart:dataEnd], encodedDate)
 		for uid, enc := range tagEncoders {
 			if enc != "" && encodersByTrackUID[uid] == "" {
 				encodersByTrackUID[uid] = enc
@@ -2186,6 +2231,11 @@ func parseMatroskaTagsFromBuffer(buf []byte, encodedDate string) (map[uint64]str
 				settingsByTrackUID[uid] = settings
 			}
 		}
+		for uid, lang := range tagLangs {
+			if lang != "" && langsByTrackUID[uid] == "" {
+				langsByTrackUID[uid] = lang
+			}
+		}
 		for trackUID, stat := range tagStats {
 			current := statsByTrackUID[trackUID]
 			mergeMatroskaTagStats(&current, stat)
@@ -2193,7 +2243,7 @@ func parseMatroskaTagsFromBuffer(buf []byte, encodedDate string) (map[uint64]str
 		}
 		searchPos = start + len(pattern)
 	}
-	return encodersByTrackUID, settingsByTrackUID, statsByTrackUID
+	return encodersByTrackUID, settingsByTrackUID, langsByTrackUID, statsByTrackUID
 }
 
 func parseMatroskaTag(buf []byte) (uint64, map[string]string) {
@@ -2659,6 +2709,43 @@ func applyMatroskaEncoders(streams []Stream, encodersByTrackUID map[uint64]strin
 				continue
 			}
 			streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Writing library", Value: audioEncoder})
+		}
+	}
+}
+
+func applyMatroskaTagLanguages(streams []Stream, langsByTrackUID map[uint64]string) {
+	if len(langsByTrackUID) == 0 {
+		return
+	}
+	for i := range streams {
+		uid := streamTrackUID(streams[i])
+		if uid == 0 {
+			continue
+		}
+		lang := strings.TrimSpace(langsByTrackUID[uid])
+		if lang == "" {
+			continue
+		}
+		// Don't override TrackEntry-provided language.
+		if streams[i].JSON != nil && streams[i].JSON["Language"] != "" {
+			continue
+		}
+		if findField(streams[i].Fields, "Language") != "" {
+			continue
+		}
+
+		code := normalizeLanguageCode(lang)
+		if code == "" {
+			code = normalizeLanguageCode(strings.ToLower(lang))
+		}
+		if code != "" {
+			if streams[i].JSON == nil {
+				streams[i].JSON = map[string]string{}
+			}
+			streams[i].JSON["Language"] = code
+		}
+		if display := formatLanguage(lang); display != "" {
+			streams[i].Fields = insertFieldBefore(streams[i].Fields, Field{Name: "Language", Value: display}, "Default")
 		}
 	}
 }

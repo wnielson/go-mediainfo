@@ -35,12 +35,15 @@ func TestParseMatroskaTracks(t *testing.T) {
 
 func TestParseMatroskaStatsTags(t *testing.T) {
 	tagsPayload := buildMatroskaTagForStats(123)
-	encoders, settings, stats := parseMatroskaTags(tagsPayload, "")
+	encoders, settings, langs, stats := parseMatroskaTags(tagsPayload, "")
 	if got := encoders[123]; got != "Lavf60.3.100" {
 		t.Fatalf("unexpected encoder: %q", got)
 	}
 	if got := settings[123]; got != "" {
 		t.Fatalf("unexpected settings: %q", got)
+	}
+	if got := langs[123]; got != "" {
+		t.Fatalf("unexpected language: %q", got)
 	}
 	entry := stats[123]
 	if !entry.trusted {

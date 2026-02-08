@@ -805,6 +805,15 @@ func applyMatroskaStats(info *MatroskaInfo, stats map[uint64]*matroskaTrackStats
 				// cluster-derived duration at default ParseSpeed).
 				if findField(info.Tracks[i].Fields, "Duration") == "" {
 					info.Tracks[i].Fields = setFieldValue(info.Tracks[i].Fields, "Duration", formatDuration(durationSeconds))
+					// If Matroska Info duration is absent, the track Duration can be stats-derived only.
+					// formatDuration rounds to milliseconds and drops them once >= 60s, so populate JSON
+					// directly to keep fractional seconds comparable to official mediainfo.
+					if info.Tracks[i].JSON == nil {
+						info.Tracks[i].JSON = map[string]string{}
+					}
+					if info.Tracks[i].JSON["Duration"] == "" {
+						info.Tracks[i].JSON["Duration"] = formatJSONSeconds(durationSeconds)
+					}
 				}
 			}
 		}
