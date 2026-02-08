@@ -675,7 +675,9 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 					if audioProbe != nil && len(audioProbe.headerStrip) > 0 {
 						effectiveSize += int64(len(audioProbe.headerStrip))
 					}
-					probeMatroskaAudio(audioProbes, trackVal, audioPayload, 1, effectiveSize, frameCount > 1)
+					// Matroska Block/SimpleBlock contains exactly one frame when not laced. When laced,
+					// each lace is a complete frame. So packet boundaries are always frame-aligned.
+					probeMatroskaAudio(audioProbes, trackVal, audioPayload, 1, effectiveSize, true)
 				}
 				if needVideo {
 					videoPayload := applyMatroskaVideoHeaderStrip(payload, videoProbe)
@@ -706,15 +708,15 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 					audioProbe.collect = false
 				}
 			}
-			// MediaInfo counts one packet per Block/SimpleBlock, even when lacing is present.
-			return trackVal, timecode, dataSize, 1, nil
+			// MediaInfo Frame_Count is effectively per-lace (per frame). For a non-laced block this is 1.
+			return trackVal, timecode, dataSize, frameCount, nil
 		}
 		if err := er.skip(dataSize); err != nil {
 			return 0, 0, 0, 0, err
 		}
 	}
-	// MediaInfo counts one packet per Block/SimpleBlock, even when lacing is present.
-	return trackVal, timecode, dataSize, 1, nil
+	// MediaInfo Frame_Count is effectively per-lace (per frame). For a non-laced block this is 1.
+	return trackVal, timecode, dataSize, frameCount, nil
 }
 
 func videoProbeNeedsSample(probe *matroskaVideoProbe) bool {
