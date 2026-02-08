@@ -1416,8 +1416,14 @@ func applyMatroskaVideoProbes(info *MatroskaInfo, probes map[uint64]*matroskaVid
 			continue
 		}
 		if probe.codec == "AVC" {
-			if probe.writingLib != "" && findField(stream.Fields, "Writing library") == "" {
-				stream.Fields = appendFieldUnique(stream.Fields, Field{Name: "Writing library", Value: probe.writingLib})
+			if probe.writingLib != "" {
+				// Prefer bitstream-derived x264 library over generic container muxer strings (Lavc/ffmpeg).
+				existing := findField(stream.Fields, "Writing library")
+				lower := strings.ToLower(existing)
+				isGeneric := existing == "" || strings.HasPrefix(existing, "Lavc") || strings.Contains(lower, "ffmpeg") || strings.Contains(lower, "libx264")
+				if isGeneric {
+					stream.Fields = setFieldValue(stream.Fields, "Writing library", probe.writingLib)
+				}
 			}
 			if probe.encoding != "" && findField(stream.Fields, "Encoding settings") == "" {
 				stream.Fields = appendFieldUnique(stream.Fields, Field{Name: "Encoding settings", Value: probe.encoding})
