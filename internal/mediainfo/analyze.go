@@ -68,6 +68,10 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			for _, field := range parsed.General {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
+			if info.DurationSeconds > 0 {
+				// Preserve fractional seconds in JSON (text Duration drops ms for long runtimes).
+				general.JSON["Duration"] = formatJSONSeconds(info.DurationSeconds)
+			}
 			setOverallBitRate(general.JSON, stat.Size(), info.DurationSeconds)
 			if headerSize, dataSize, footerSize, mdatCount, moovBeforeMdat, ok := mp4TopLevelSizes(file, stat.Size()); ok {
 				general.JSON["HeaderSize"] = strconv.FormatInt(headerSize, 10)
@@ -120,14 +124,18 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 						bitrate = (float64(track.SampleBytes) * 8) / durationForBitrate
 					}
 					fields = addStreamDuration(fields, displayDuration)
+					// Preserve fractional seconds in JSON (text Duration drops ms for long runtimes).
+					jsonExtras["Duration"] = formatJSONSeconds(displayDuration)
 					if sourceDuration > 0 {
 						fields = appendFieldUnique(fields, Field{Name: "Source duration", Value: formatDuration(sourceDuration)})
+						jsonExtras["Source_Duration"] = formatJSONSeconds(sourceDuration)
 						if track.SampleDelta > 0 && track.LastSampleDelta > 0 && track.Timescale > 0 {
 							if track.LastSampleDelta != track.SampleDelta {
 								diffSamples := int64(track.LastSampleDelta) - int64(track.SampleDelta)
 								diffMs := int64(math.Round(float64(diffSamples) * 1000 / float64(track.Timescale)))
 								if diffMs != 0 {
 									fields = appendFieldUnique(fields, Field{Name: "Source_Duration_LastFrame", Value: strconv.FormatInt(diffMs, 10) + " ms"})
+									jsonExtras["Source_Duration_LastFrame"] = formatJSONSeconds(float64(diffMs) / 1000.0)
 								}
 							}
 						}
