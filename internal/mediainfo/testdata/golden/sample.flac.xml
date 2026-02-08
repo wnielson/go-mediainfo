@@ -17,9 +17,9 @@
 <StreamSize>0</StreamSize>
 <File_Modified_Date><redacted></File_Modified_Date>
 <File_Modified_Date_Local><redacted></File_Modified_Date_Local>
+<Encoded_Application>Lavf62.3.100</Encoded_Application>
 </track>
 <track type="Audio">
-<StreamOrder>0</StreamOrder>
 <Format>FLAC</Format>
 <Duration>4.000</Duration>
 <BitRate_Mode>VBR</BitRate_Mode>
@@ -28,7 +28,13 @@
 <ChannelPositions>Front: C</ChannelPositions>
 <ChannelLayout>M</ChannelLayout>
 <SamplingRate>48000</SamplingRate>
+<SamplingCount>192000</SamplingCount>
+<Compression_Mode>Lossless</Compression_Mode>
+<Encoded_Library>Lavf62.3.100</Encoded_Library>
 <StreamSize>52747</StreamSize>
+<extra>
+<MD5_Unencoded>97EED3BC2F094D9221F0E9772AC7B3E7</MD5_Unencoded>
+</extra>
 <BitDepth>16</BitDepth>
 </track>
 </media>

@@ -809,17 +809,37 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 		}
 	case "FLAC":
-		if parsedInfo, parsedStreams, ok := ParseFLAC(file, stat.Size()); ok {
+		if parsedInfo, parsedStreams, tagJSON, tagJSONRaw, ok := ParseFLAC(file, stat.Size()); ok {
 			info = parsedInfo
 			streams = parsedStreams
 			general.JSON = map[string]string{}
 			if info.DurationSeconds > 0 {
 				general.JSON["Duration"] = formatJSONSeconds(info.DurationSeconds)
 			}
-			// Official mediainfo overall bitrate uses total file size for FLAC.
-			setOverallBitRate(general.JSON, stat.Size(), info.DurationSeconds)
+			// Official mediainfo overall bitrate uses Duration in integer milliseconds for FLAC.
+			if info.DurationSeconds > 0 {
+				durationMs := int64(math.Round(info.DurationSeconds * 1000))
+				if durationMs > 0 {
+					general.JSON["OverallBitRate"] = strconv.FormatInt((stat.Size()*8000)/durationMs, 10)
+				}
+			}
 			// Official mediainfo sets General StreamSize=0 for FLAC.
 			general.JSON["StreamSize"] = "0"
+			if len(tagJSON) > 0 {
+				for k, v := range tagJSON {
+					if general.JSON[k] == "" {
+						general.JSON[k] = v
+					}
+				}
+			}
+			if len(tagJSONRaw) > 0 {
+				if general.JSONRaw == nil {
+					general.JSONRaw = map[string]string{}
+				}
+				for k, v := range tagJSONRaw {
+					general.JSONRaw[k] = v
+				}
+			}
 		}
 	case "Wave":
 		if parsedInfo, parsedStreams, ok := ParseWAV(file, stat.Size()); ok {

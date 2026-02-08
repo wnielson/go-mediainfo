@@ -9,8 +9,8 @@
 "OverallBitRate":"122066",
 "StreamSize":"0",
 "File_Modified_Date":"<redacted>",
-"File_Modified_Date_Local":"<redacted>"},{"@type":"Audio","StreamOrder":"0",
-"Format":"FLAC",
+"File_Modified_Date_Local":"<redacted>",
+"Encoded_Application":"Lavf62.3.100"},{"@type":"Audio","Format":"FLAC",
 "Duration":"4.000",
 "BitRate_Mode":"VBR",
 "BitRate":"105494",
@@ -18,6 +18,10 @@
 "ChannelPositions":"Front: C",
 "ChannelLayout":"M",
 "SamplingRate":"48000",
+"SamplingCount":"192000",
+"Compression_Mode":"Lossless",
+"Encoded_Library":"Lavf62.3.100",
 "StreamSize":"52747",
+"extra":{"MD5_Unencoded":"97EED3BC2F094D9221F0E9772AC7B3E7"},
 "BitDepth":"16"}]}
 }
