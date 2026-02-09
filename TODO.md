@@ -4,6 +4,8 @@
 - Goal: 1:1 MediaInfo CLI parity (fields + values + ordering) across text/JSON/XML/CSV
 - Expand format coverage + field parity across CLI outputs
 - Samples: generated fixtures in `samples/` (see `samples/README.md` + `samples/generate.sh`)
+- Real-world spot checks (2026-02-09): JSON 1:1 vs official at `--ParseSpeed=0.5` for:
+  - AVI (DivX/DX50), MKV (H.264), MP4 (H.264), FLAC (VorbisComment), MP3 (ID3v2)
 - Sample parity complete: MP4/MKV/TS/AVI/MPEG Video (MPG) (text output)
 - Next targets: sample sweep (PS/TS edge cases), parity audit for JSON/XML/CSV
 - Remaining diffs: broader sample sweep for edge cases
