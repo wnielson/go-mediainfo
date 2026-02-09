@@ -50,6 +50,13 @@ func setOverallBitRate(json map[string]string, size int64, duration float64) {
 	if duration <= 0 {
 		return
 	}
-	overall := (float64(size) * 8) / duration
-	json["OverallBitRate"] = strconv.FormatInt(int64(math.Round(overall)), 10)
+	// Match MediaInfo: bitrate computations are effectively based on integer milliseconds.
+	durationMs := int64(math.Round(duration * 1000))
+	if durationMs <= 0 {
+		return
+	}
+	overall := (size*8000 + durationMs/2) / durationMs
+	if overall > 0 {
+		json["OverallBitRate"] = strconv.FormatInt(overall, 10)
+	}
 }

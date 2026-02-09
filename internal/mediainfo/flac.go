@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -35,6 +36,8 @@ func ParseFLAC(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[str
 	var audioStart int64
 	var encoder string
 	tags := map[string]string{}
+	var coverMIME string
+	var coverType string
 
 	for {
 		var blockHeader [4]byte
@@ -90,8 +93,22 @@ func ParseFLAC(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[str
 				}
 			}
 		} else {
-			if _, err := file.Seek(int64(blockLen), io.SeekCurrent); err != nil {
-				break
+			if blockType == 6 {
+				// METADATA_BLOCK_PICTURE (cover art). We only need the mime/type to match MediaInfo.
+				buf := make([]byte, blockLen)
+				if _, err := io.ReadFull(file, buf); err != nil {
+					break
+				}
+				if coverMIME == "" {
+					if mime, typ, ok := parseFLACPicture(buf); ok {
+						coverMIME = mime
+						coverType = typ
+					}
+				}
+			} else {
+				if _, err := file.Seek(int64(blockLen), io.SeekCurrent); err != nil {
+					break
+				}
 			}
 		}
 		if isLast {
@@ -110,6 +127,10 @@ func ParseFLAC(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[str
 	duration := 0.0
 	if totalSamples > 0 {
 		duration = float64(totalSamples) / float64(sampleRate)
+	}
+	// Match MediaInfo: FLAC duration is treated at millisecond precision.
+	if duration > 0 {
+		duration = math.Round(duration*1000) / 1000
 	}
 
 	bitrate := 0.0
@@ -155,7 +176,8 @@ func ParseFLAC(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[str
 			// MediaInfo's FLAC bitrates use Duration in integer milliseconds.
 			durationMs := int64((totalSamples*1000 + uint64(sampleRate)/2) / uint64(sampleRate))
 			if durationMs > 0 {
-				br := (payload * 8000) / durationMs
+				// Round to nearest b/s (MediaInfo output is exact integer).
+				br := (payload*8000 + durationMs/2) / durationMs
 				if br > 0 {
 					streamJSON["BitRate"] = strconv.FormatInt(br, 10)
 				}
@@ -180,8 +202,56 @@ func ParseFLAC(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[str
 	}
 
 	generalJSON, generalJSONRaw := flacTagsToGeneralJSON(tags, encoder)
+	if coverMIME != "" && generalJSON != nil {
+		generalJSON["Cover"] = "Yes"
+		generalJSON["Cover_Mime"] = coverMIME
+		if coverType != "" {
+			generalJSON["Cover_Type"] = coverType
+		}
+	}
 
 	return info, []Stream{{Kind: StreamAudio, Fields: fields, JSON: streamJSON, JSONRaw: streamJSONRaw, JSONSkipStreamOrder: true}}, generalJSON, generalJSONRaw, true
+}
+
+func parseFLACPicture(data []byte) (mime string, typ string, ok bool) {
+	// https://xiph.org/flac/format.html#metadata_block_picture
+	// picture_type(32), mime_length(32), mime, desc_length(32), desc, width(32), height(32),
+	// depth(32), colors(32), data_length(32), data
+	if len(data) < 32 {
+		return "", "", false
+	}
+	picType := binary.BigEndian.Uint32(data[0:4])
+	pos := 4
+	mimeLen := int(binary.BigEndian.Uint32(data[pos : pos+4]))
+	pos += 4
+	if mimeLen < 0 || pos+mimeLen > len(data) {
+		return "", "", false
+	}
+	mime = string(data[pos : pos+mimeLen])
+	pos += mimeLen
+	if pos+4 > len(data) {
+		return "", "", false
+	}
+	descLen := int(binary.BigEndian.Uint32(data[pos : pos+4]))
+	pos += 4 + descLen
+	if pos+20 > len(data) {
+		return "", "", false
+	}
+	// Skip width/height/depth/colors.
+	pos += 16
+	if pos+4 > len(data) {
+		return "", "", false
+	}
+	_ = binary.BigEndian.Uint32(data[pos : pos+4]) // data_length
+	switch picType {
+	case 3:
+		typ = "Cover (front)"
+	case 4:
+		typ = "Cover (back)"
+	default:
+		typ = ""
+	}
+	return mime, typ, true
 }
 
 func parseFLACStreamInfo(data []byte) (uint32, uint8, uint8, uint64, string) {
@@ -300,15 +370,19 @@ func flacTagsToGeneralJSON(tags map[string]string, encoder string) (map[string]s
 		mapped["ALBUM"] = true
 	}
 	if v := tags["ALBUMARTIST"]; v != "" {
-		set("Album_Performer", v)
+		// MediaInfo only emits Album_Performer when it differs from Performer.
+		if tags["ARTIST"] == "" || tags["ARTIST"] != v {
+			set("Album_Performer", v)
+		}
 		mapped["ALBUMARTIST"] = true
 	}
 	if v := tags["ARTIST"]; v != "" {
 		set("Performer", v)
 		mapped["ARTIST"] = true
-		if general["Album_Performer"] == "" {
-			set("Album_Performer", v)
-		}
+	}
+	if v := tags["GENRE"]; v != "" {
+		set("Genre", v)
+		mapped["GENRE"] = true
 	}
 	if v := tags["COMPOSER"]; v != "" {
 		set("Composer", v)
