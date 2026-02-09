@@ -405,10 +405,14 @@ func (p *psStreamParser) consumePayload(entry *psStream, key uint16, flags byte,
 				return
 			}
 			consumeAC3PS(entry, payload)
-		} else {
-			consumeADTSPS(entry, payload)
-			if entry.hasAudioInfo && entry.format == "MPEG Audio" {
-				entry.format = "AAC"
+		} else if entry.format == "MPEG Audio" {
+			consumeMPEGAudioPS(entry, payload)
+			// Only attempt ADTS detection when we have not identified a valid MPEG audio stream.
+			if entry.mpegAudioLayer == 0 {
+				consumeADTSPS(entry, payload)
+				if entry.audioProfile != "" {
+					entry.format = "AAC"
+				}
 			}
 		}
 	}

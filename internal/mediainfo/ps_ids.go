@@ -13,6 +13,11 @@ type psStream struct {
 	audioRate            float64
 	audioChannels        uint64
 	hasAudioInfo         bool
+	mpegAudioVersion     byte
+	mpegAudioLayer       byte
+	mpegAudioBitrateKbps int
+	mpegAudioBitrateMin  int
+	mpegAudioBitrateMax  int
 	audioFrames          uint64
 	audioBuffer          []byte
 	ac3Info              ac3Info

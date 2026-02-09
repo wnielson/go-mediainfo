@@ -45,7 +45,7 @@ func TestMpegPsGOPHeaderJSONBitRate(t *testing.T) {
 		t.Fatalf("missing video bitrate")
 	}
 	// Sample generated in samples/generate.sh (ffmpeg); fixed fixture, expect stable bitrate.
-	if bitrate != "2210193" {
+	if bitrate != "2216694" {
 		t.Fatalf("unexpected video bitrate: %s", bitrate)
 	}
 }

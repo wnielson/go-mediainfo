@@ -124,6 +124,16 @@ func audioDurationPS(st *psStream, opts mpegPSOptions) float64 {
 		if value := aacDurationPS(st); value > 0 {
 			duration = value
 		}
+	} else if st.mpegAudioLayer != 0 && st.audioRate > 0 && st.audioFrames > 0 {
+		rate := st.audioRate
+		spf := mpegAudioSamplesPerFrame(st.mpegAudioVersion, st.mpegAudioLayer)
+		if rate > 0 && spf > 0 {
+			derived := (float64(st.audioFrames) * float64(spf)) / rate
+			threshold := (float64(spf) / rate) / 2.0
+			if duration == 0 || math.Abs(derived-duration) > threshold {
+				duration = derived
+			}
+		}
 	} else if duration == 0 && st.audioRate > 0 && st.audioFrames > 0 {
 		rate := int64(st.audioRate)
 		if rate > 0 {
@@ -317,7 +327,7 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 				}
 				if duration > 0 {
 					if st.videoFrameRate > 0 {
-						duration += 2.0 / st.videoFrameRate
+						duration += 1.0 / st.videoFrameRate
 					}
 					fields = addStreamDuration(fields, duration)
 				}
@@ -459,7 +469,7 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 					}
 				}
 				if duration > 0 && info.FrameRate > 0 && !fromGOP {
-					duration += 2.0 / info.FrameRate
+					duration += 1.0 / info.FrameRate
 				}
 				if sync.duration > 0 && !headerOnly {
 					candidate := sync.duration + (sync.durationDelayMs / 1000.0)
@@ -583,6 +593,11 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 				}
 				if info.AspectRatio != "" {
 					fields = append(fields, Field{Name: "Display aspect ratio", Value: info.AspectRatio})
+				} else if info.Width > 0 && info.Height > 0 {
+					// Square pixels: MediaInfo reports display aspect ratio derived from stored dimensions.
+					if ar := formatAspectRatio(info.Width, info.Height); ar != "" {
+						fields = append(fields, Field{Name: "Display aspect ratio", Value: ar})
+					}
 				}
 				if info.FrameRateNumer > 0 && info.FrameRateDenom > 0 {
 					fields = append(fields, Field{Name: "Frame rate", Value: formatFrameRateRatio(info.FrameRateNumer, info.FrameRateDenom)})
@@ -818,32 +833,106 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 					}
 				}
 			} else if st.audioRate > 0 {
-				fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
-				fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(st.audioChannels)})
-				if layout := channelLayout(st.audioChannels); layout != "" {
-					fields = append(fields, Field{Name: "Channel layout", Value: layout})
-				}
-				fields = append(fields, Field{Name: "Sampling rate", Value: formatSampleRate(st.audioRate)})
-				frameRate := st.audioRate / 1024.0
-				fields = append(fields, Field{Name: "Frame rate", Value: formatAudioFrameRate(frameRate, 1024)})
-				fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
-				if duration > 0 && st.bytes > 0 && st.audioProfile == "" {
-					bitrate := (float64(st.bytes) * 8) / duration
-					if value := formatBitrate(bitrate); value != "" {
-						fields = append(fields, Field{Name: "Bit rate", Value: value})
+				if st.format == "MPEG Audio" && st.mpegAudioLayer != 0 {
+					spf := mpegAudioSamplesPerFrame(st.mpegAudioVersion, st.mpegAudioLayer)
+					frameRate := 0.0
+					if st.audioRate > 0 && spf > 0 {
+						frameRate = st.audioRate / float64(spf)
 					}
-				}
-				if st.bytes > 0 && st.audioProfile == "" {
-					if streamSize := formatStreamSize(int64(st.bytes), size); streamSize != "" {
-						fields = append(fields, Field{Name: "Stream size", Value: streamSize})
+
+					brMode := "Variable"
+					brModeJSON := "VBR"
+					if st.mpegAudioBitrateMin > 0 && st.mpegAudioBitrateMin == st.mpegAudioBitrateMax {
+						brMode = "Constant"
+						brModeJSON = "CBR"
 					}
-				}
-				if st.audioProfile != "" && videoPTS.has() && st.pts.has() {
-					delay := float64(int64(st.pts.min)-int64(videoPTS.min)) * 1000 / 90000.0
-					if videoIsH264 && videoFrameRate > 0 {
-						delay -= (3.0 / videoFrameRate) * 1000.0
+					fields = append(fields, Field{Name: "Bit rate mode", Value: brMode})
+					if st.mpegAudioBitrateKbps > 0 {
+						fields = append(fields, Field{Name: "Bit rate", Value: formatBitrateKbps(int64(st.mpegAudioBitrateKbps))})
+					} else if duration > 0 && st.bytes > 0 {
+						bitrate := (float64(st.bytes) * 8) / duration
+						if value := formatBitrate(bitrate); value != "" {
+							fields = append(fields, Field{Name: "Bit rate", Value: value})
+						}
 					}
-					fields = append(fields, Field{Name: "Delay relative to video", Value: formatDelayMs(int64(math.Round(delay)))})
+					fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(st.audioChannels)})
+					fields = append(fields, Field{Name: "Sampling rate", Value: formatSampleRate(st.audioRate)})
+					if frameRate > 0 && spf > 0 {
+						fields = append(fields, Field{Name: "Frame rate", Value: formatAudioFrameRate(frameRate, spf)})
+					}
+					fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
+					if st.bytes > 0 {
+						if streamSize := formatStreamSize(int64(st.bytes), size); streamSize != "" {
+							fields = append(fields, Field{Name: "Stream size", Value: streamSize})
+						}
+					}
+
+					// JSON extras to match MediaInfo for MPEG audio in PS/VOB.
+					jsonExtras["BitRate_Mode"] = brModeJSON
+					jsonExtras["Compression_Mode"] = "Lossy"
+					if st.mpegAudioLayer == 0x02 {
+						jsonExtras["Format_Profile"] = "Layer 2"
+					} else if st.mpegAudioLayer == 0x01 {
+						jsonExtras["Format_Profile"] = "Layer 3"
+					} else if st.mpegAudioLayer == 0x03 {
+						jsonExtras["Format_Profile"] = "Layer 1"
+					}
+					if st.mpegAudioVersion == 0x03 {
+						jsonExtras["Format_Version"] = "1"
+					}
+					if st.mpegAudioBitrateKbps > 0 {
+						jsonExtras["BitRate"] = strconv.Itoa(st.mpegAudioBitrateKbps * 1000)
+					} else if duration > 0 && st.bytes > 0 {
+						jsonExtras["BitRate"] = strconv.FormatInt(int64(math.Round((float64(st.bytes)*8)/duration)), 10)
+					}
+					if st.audioRate > 0 {
+						jsonExtras["SamplingRate"] = strconv.Itoa(int(math.Round(st.audioRate)))
+					}
+					if st.audioChannels > 0 {
+						jsonExtras["Channels"] = strconv.FormatUint(st.audioChannels, 10)
+					}
+					if spf > 0 {
+						jsonExtras["SamplesPerFrame"] = strconv.Itoa(spf)
+					}
+					if st.audioFrames > 0 && spf > 0 {
+						samplingCount := int64(st.audioFrames) * int64(spf)
+						jsonExtras["SamplingCount"] = strconv.FormatInt(samplingCount, 10)
+						jsonExtras["FrameCount"] = strconv.FormatUint(st.audioFrames, 10)
+						if frameRate > 0 {
+							jsonExtras["FrameRate"] = formatJSONFloat(frameRate)
+						}
+					}
+					if st.bytes > 0 {
+						jsonExtras["StreamSize"] = strconv.FormatUint(st.bytes, 10)
+					}
+				} else {
+					fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
+					fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(st.audioChannels)})
+					if layout := channelLayout(st.audioChannels); layout != "" {
+						fields = append(fields, Field{Name: "Channel layout", Value: layout})
+					}
+					fields = append(fields, Field{Name: "Sampling rate", Value: formatSampleRate(st.audioRate)})
+					frameRate := st.audioRate / 1024.0
+					fields = append(fields, Field{Name: "Frame rate", Value: formatAudioFrameRate(frameRate, 1024)})
+					fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
+					if duration > 0 && st.bytes > 0 && st.audioProfile == "" {
+						bitrate := (float64(st.bytes) * 8) / duration
+						if value := formatBitrate(bitrate); value != "" {
+							fields = append(fields, Field{Name: "Bit rate", Value: value})
+						}
+					}
+					if st.bytes > 0 && st.audioProfile == "" {
+						if streamSize := formatStreamSize(int64(st.bytes), size); streamSize != "" {
+							fields = append(fields, Field{Name: "Stream size", Value: streamSize})
+						}
+					}
+					if st.audioProfile != "" && videoPTS.has() && st.pts.has() {
+						delay := float64(int64(st.pts.min)-int64(videoPTS.min)) * 1000 / 90000.0
+						if videoIsH264 && videoFrameRate > 0 {
+							delay -= (3.0 / videoFrameRate) * 1000.0
+						}
+						fields = append(fields, Field{Name: "Delay relative to video", Value: formatDelayMs(int64(math.Round(delay)))})
+					}
 				}
 			}
 			if st.hasAC3 {
@@ -1059,7 +1148,7 @@ func finalizeMPEGPS(streams map[uint16]*psStream, streamOrder []uint16, videoPar
 	videoDuration := 0.0
 	if duration := ptsDurationPS(videoPTS, opts); duration > 0 {
 		if videoFrameRate > 0 {
-			duration += 2.0 / videoFrameRate
+			duration += 1.0 / videoFrameRate
 		}
 		syncApplied := false
 		if sync.duration > 0 {
@@ -1356,6 +1445,73 @@ func consumeADTSPS(entry *psStream, payload []byte) {
 			}
 		}
 		i += frameLen
+	}
+	if i > 0 {
+		entry.audioBuffer = append(entry.audioBuffer[:0], entry.audioBuffer[i:]...)
+	}
+}
+
+func consumeMPEGAudioPS(entry *psStream, payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+	entry.audioBuffer = append(entry.audioBuffer, payload...)
+	const maxProbe = 512 << 10
+	if len(entry.audioBuffer) > maxProbe {
+		entry.audioBuffer = append(entry.audioBuffer[:0], entry.audioBuffer[len(entry.audioBuffer)-maxProbe:]...)
+	}
+
+	i := 0
+	for i+4 <= len(entry.audioBuffer) {
+		if entry.audioBuffer[i] != 0xFF || (entry.audioBuffer[i+1]&0xE0) != 0xE0 {
+			i++
+			continue
+		}
+		hdr, ok := parseMPEGAudioHeader(entry.audioBuffer[i : i+4])
+		if !ok {
+			i++
+			continue
+		}
+		frameLen := mpegAudioFrameLengthBytes(hdr)
+		if frameLen <= 0 {
+			i++
+			continue
+		}
+		if i+frameLen > len(entry.audioBuffer) {
+			break
+		}
+		// Validate next frame header when possible.
+		if i+frameLen+4 <= len(entry.audioBuffer) {
+			next, ok := parseMPEGAudioHeader(entry.audioBuffer[i+frameLen : i+frameLen+4])
+			if !ok || next.sampleRate != hdr.sampleRate || next.layerID != hdr.layerID || next.versionID != hdr.versionID || next.channels != hdr.channels {
+				i++
+				continue
+			}
+		}
+
+		entry.audioFrames++
+		if !entry.hasAudioInfo {
+			entry.audioRate = float64(hdr.sampleRate)
+			entry.audioChannels = uint64(hdr.channels)
+			entry.hasAudioInfo = true
+			entry.mpegAudioVersion = hdr.versionID
+			entry.mpegAudioLayer = hdr.layerID
+			entry.mpegAudioBitrateMin = hdr.bitrateKbps
+			entry.mpegAudioBitrateMax = hdr.bitrateKbps
+		} else {
+			if hdr.bitrateKbps > 0 {
+				if entry.mpegAudioBitrateMin == 0 || hdr.bitrateKbps < entry.mpegAudioBitrateMin {
+					entry.mpegAudioBitrateMin = hdr.bitrateKbps
+				}
+				if hdr.bitrateKbps > entry.mpegAudioBitrateMax {
+					entry.mpegAudioBitrateMax = hdr.bitrateKbps
+				}
+			}
+		}
+		i += frameLen
+	}
+	if entry.mpegAudioBitrateMin > 0 && entry.mpegAudioBitrateMin == entry.mpegAudioBitrateMax {
+		entry.mpegAudioBitrateKbps = entry.mpegAudioBitrateMin
 	}
 	if i > 0 {
 		entry.audioBuffer = append(entry.audioBuffer[:0], entry.audioBuffer[i:]...)

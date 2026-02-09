@@ -551,7 +551,8 @@ func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
 func mapMPEG2AspectRatio(code uint64) string {
 	switch code {
 	case 1:
-		return "1:1"
+		// Square pixels: display aspect ratio is derived from stored width/height.
+		return ""
 	case 2:
 		return "4:3"
 	case 3:

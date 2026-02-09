@@ -12,16 +12,17 @@
 <FileExtension>vob</FileExtension>
 <Format>MPEG-PS</Format>
 <FileSize>1228800</FileSize>
-<Duration>4.004</Duration>
+<Duration>4.008</Duration>
 <OverallBitRate_Mode>VBR</OverallBitRate_Mode>
-<OverallBitRate>2455145</OverallBitRate>
+<OverallBitRate>2452695</OverallBitRate>
 <FrameRate>29.970</FrameRate>
-<FrameCount>120</FrameCount>
-<StreamSize>113380</StreamSize>
+<FrameCount>119</FrameCount>
+<StreamSize>34783</StreamSize>
 <File_Modified_Date><redacted></File_Modified_Date>
 <File_Modified_Date_Local><redacted></File_Modified_Date_Local>
 </track>
 <track type="Video">
+<StreamOrder>0</StreamOrder>
 <FirstPacketOrder>0</FirstPacketOrder>
 <ID>224</ID>
 <Format>MPEG Video</Format>
@@ -31,20 +32,20 @@
 <Format_Settings_BVOP>No</Format_Settings_BVOP>
 <Format_Settings_Matrix>Default</Format_Settings_Matrix>
 <Format_Settings_GOP>N=15</Format_Settings_GOP>
-<Duration>4.004</Duration>
+<Duration>3.971</Duration>
 <BitRate_Mode>VBR</BitRate_Mode>
-<BitRate>2210193</BitRate>
+<BitRate>2211886</BitRate>
 <BitRate_Maximum>8000000</BitRate_Maximum>
 <Width>720</Width>
 <Height>480</Height>
 <Sampled_Width>720</Sampled_Width>
 <Sampled_Height>480</Sampled_Height>
-<PixelAspectRatio>0.667</PixelAspectRatio>
-<DisplayAspectRatio>1.000</DisplayAspectRatio>
+<PixelAspectRatio>1.000</PixelAspectRatio>
+<DisplayAspectRatio>1.500</DisplayAspectRatio>
 <FrameRate>29.970</FrameRate>
 <FrameRate_Num>30000</FrameRate_Num>
 <FrameRate_Den>1001</FrameRate_Den>
-<FrameCount>120</FrameCount>
+<FrameCount>119</FrameCount>
 <Standard>NTSC</Standard>
 <ColorSpace>YUV</ColorSpace>
 <ChromaSubsampling>4:2:0</ChromaSubsampling>
@@ -61,21 +62,33 @@
 <TimeCode_Source>Group of pictures header</TimeCode_Source>
 <Gop_OpenClosed>Open</Gop_OpenClosed>
 <Gop_OpenClosed_FirstFrame>Closed</Gop_OpenClosed_FirstFrame>
-<StreamSize>1115420</StreamSize>
+<StreamSize>1097825</StreamSize>
 <BufferSize>229376</BufferSize>
 <extra>
 <intra_dc_precision>8</intra_dc_precision>
 </extra>
 </track>
 <track type="Audio">
-<StreamOrder>0</StreamOrder>
+<StreamOrder>1</StreamOrder>
 <FirstPacketOrder>1</FirstPacketOrder>
 <ID>192</ID>
 <Format>MPEG Audio</Format>
-<Duration>3.960</Duration>
+<Format_Version>1</Format_Version>
+<Duration>4.008</Duration>
+<BitRate_Mode>CBR</BitRate_Mode>
+<BitRate>192000</BitRate>
+<Channels>1</Channels>
+<SamplesPerFrame>1152</SamplesPerFrame>
+<SamplingRate>48000</SamplingRate>
+<SamplingCount>192384</SamplingCount>
+<FrameRate>41.667</FrameRate>
+<FrameCount>167</FrameCount>
+<Compression_Mode>Lossy</Compression_Mode>
 <Delay>0.523344444</Delay>
 <Delay_Source>Container</Delay_Source>
 <Video_Delay>-0.010</Video_Delay>
+<StreamSize>96192</StreamSize>
+<Format_Profile>Layer 2</Format_Profile>
 </track>
 </media>
 </MediaInfo>

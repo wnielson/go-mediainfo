@@ -345,8 +345,11 @@ func buildJSONComputedFields(kind StreamKind, fields []jsonKV, containerFormat s
 
 	if kind == StreamAudio {
 		if channels != "" && jsonFieldValue(fields, "ChannelPositions") == "" {
-			if pos := channelPositionsFromCount(channels); pos != "" {
-				out = append(out, jsonKV{Key: "ChannelPositions", Val: pos})
+			// Official mediainfo does not emit ChannelPositions for MPEG Audio in MPEG-PS (e.g. VOB).
+			if !(containerFormat == "MPEG-PS" && format == "MPEG Audio") {
+				if pos := channelPositionsFromCount(channels); pos != "" {
+					out = append(out, jsonKV{Key: "ChannelPositions", Val: pos})
+				}
 			}
 		}
 		if strings.EqualFold(format, "AAC") {
