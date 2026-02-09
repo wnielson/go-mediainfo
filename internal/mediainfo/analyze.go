@@ -180,7 +180,12 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 						}
 						fields = addStreamBitrate(fields, bitrate)
 						// Match official mediainfo rounding for derived MP4 bitrates.
-						jsonExtras["BitRate"] = strconv.FormatInt(int64(math.Floor(bitrate)), 10)
+						// Observed: video uses rounding, audio uses truncation.
+						if track.Kind == StreamVideo {
+							jsonExtras["BitRate"] = strconv.FormatInt(int64(math.Round(bitrate)), 10)
+						} else {
+							jsonExtras["BitRate"] = strconv.FormatInt(int64(math.Floor(bitrate)), 10)
+						}
 					}
 				}
 				if track.SampleBytes > 0 {
@@ -224,6 +229,24 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 					}
 					if streamBytes > 0 {
 						jsonExtras["StreamSize"] = strconv.FormatInt(streamBytes, 10)
+					}
+					// MP4 AAC: official sometimes derives BitRate from StreamSize and Duration rather than
+					// trusting the rounded "kb/s" field value.
+					if track.Kind == StreamAudio {
+						if findField(fields, "Format") != "" && strings.Contains(findField(fields, "Format"), "AAC") {
+							if findField(fields, "Bit rate mode") == "Constant" {
+								if bps, ok := parseBitrateBps(findField(fields, "Bit rate")); ok && bps > 0 && bps%8000 != 0 {
+									durationMs := int64(math.Round(displayDuration * 1000))
+									if durationMs > 0 && streamBytes > 0 {
+										derived := (streamBytes * 8000) / durationMs
+										if derived > 0 {
+											jsonExtras["BitRate"] = strconv.FormatInt(derived, 10)
+											fields = setFieldValue(fields, "Bit rate", formatBitrate(float64(derived)))
+										}
+									}
+								}
+							}
+						}
 					}
 					if sourceDuration > 0 {
 						if sourceSize := formatStreamSize(int64(track.SampleBytes), stat.Size()); sourceSize != "" {
