@@ -109,7 +109,7 @@ type mpeg2VideoParser struct {
 	currentGOPCount   int
 	sawGOP            bool
 	gopLength         int
-	gopVariable       bool
+	gopLengthCounts   map[int]int
 	gopM              int
 	gopN              int
 	gopMVariable      bool
@@ -442,9 +442,11 @@ func (p *mpeg2VideoParser) parseGOPHeader(data []byte) {
 	if p.sawGOP && p.currentGOPCount > 0 {
 		if p.gopLength == 0 {
 			p.gopLength = p.currentGOPCount
-		} else if p.currentGOPCount != p.gopLength {
-			p.gopVariable = true
 		}
+		if p.gopLengthCounts == nil {
+			p.gopLengthCounts = map[int]int{}
+		}
+		p.gopLengthCounts[p.currentGOPCount]++
 	}
 	p.currentGOPCount = 0
 	p.sawGOP = true
@@ -491,13 +493,34 @@ func (p *mpeg2VideoParser) parsePictureHeader(data []byte) {
 }
 
 func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
-	switch {
-	case p.gopVariable:
-		p.info.GOPVariable = true
-	case p.gopLength > 0:
+	// Record the final GOP length if the stream ends without a following GOP header.
+	if p.sawGOP && p.currentGOPCount > 0 {
+		if p.gopLength == 0 {
+			p.gopLength = p.currentGOPCount
+		}
+		if p.gopLengthCounts == nil {
+			p.gopLengthCounts = map[int]int{}
+		}
+		p.gopLengthCounts[p.currentGOPCount]++
+	}
+	if len(p.gopLengthCounts) > 0 {
+		mode, variable := modeValue(p.gopLengthCounts)
+		total := 0
+		modeCount := 0
+		for key, count := range p.gopLengthCounts {
+			total += count
+			if key == mode {
+				modeCount = count
+			}
+		}
+		// MediaInfo tends to report the dominant GOP length instead of "Variable" if most GOPs match.
+		if !variable || (total > 0 && float64(modeCount)/float64(total) >= 0.50) {
+			p.info.GOPLength = mode
+		} else {
+			p.info.GOPVariable = true
+		}
+	} else if p.gopLength > 0 {
 		p.info.GOPLength = p.gopLength
-	case p.currentGOPCount > 0:
-		p.info.GOPLength = p.currentGOPCount
 	}
 	if p.gopN > 0 && !p.gopNVariable {
 		p.info.GOPN = p.gopN
@@ -512,7 +535,6 @@ func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
 		p.info.GOPN, p.gopNVariable = modeValue(p.gopNCounts)
 	}
 	if p.gopMVariable || p.gopNVariable {
-		p.info.GOPVariable = true
 		p.info.GOPM = 0
 		p.info.GOPN = 0
 	}

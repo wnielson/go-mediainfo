@@ -991,6 +991,11 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			_ = completeNameLast
 		}
 		parseSpeed := opts.ParseSpeed
+		// MediaInfo CLI reports full/accurate DVD VOB stats even at default ParseSpeed (0.5).
+		// For parity, avoid MPEG-PS sampling for standalone .vob files.
+		if strings.EqualFold(filepath.Ext(path), ".vob") && parseSpeed > 0 && parseSpeed < 1 {
+			parseSpeed = 1
+		}
 		if dvdParsing && parseSpeed < 1 {
 			// DVD-Video VOB aggregation needs full parsing for stable duration/stream stats.
 			parseSpeed = 1
@@ -1084,8 +1089,8 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 						videoBitRate *= 0.99
 						if videoBitRate >= 10000 {
 							durationMs := float64(0)
-							if fc, ok := frameCountFromFields(streams[videoIndex].Fields); ok {
-								if parsed, err := strconv.ParseFloat(fc, 64); err == nil && parsed > 0 {
+							if frameCount != "" {
+								if parsed, err := strconv.ParseFloat(frameCount, 64); err == nil && parsed > 0 {
 									if frField := findField(streams[videoIndex].Fields, "Frame rate"); frField != "" {
 										// Match MediaInfoLib: it uses the numeric FrameRate float value first.
 										if frValue := extractLeadingNumber(frField); frValue != "" {
@@ -1103,9 +1108,14 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 									durationMs = seconds * 1000
 								}
 							}
+							if durationMs == 0 && generalDurationMs > 0 {
+								durationMs = float64(generalDurationMs)
+							}
 							if durationMs > 0 {
 								videoBps := int64(math.Round(videoBitRate))
-								videoSS := int64(math.Round((float64(videoBps) / 8) * durationMs / 1000))
+								// MediaInfoLib derives video StreamSize from the float bitrate (not the rounded integer),
+								// then rounds the resulting byte count. This matters for 1:1 parity on MPEG-PS/VOB.
+								videoSS := int64(math.Round((videoBitRate / 8) * durationMs / 1000))
 								if videoBps > 0 && videoSS > 0 {
 									if streams[videoIndex].JSON == nil {
 										streams[videoIndex].JSON = map[string]string{}
