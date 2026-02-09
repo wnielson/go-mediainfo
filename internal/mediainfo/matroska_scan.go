@@ -675,9 +675,11 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 					if audioProbe != nil && len(audioProbe.headerStrip) > 0 {
 						effectiveSize += int64(len(audioProbe.headerStrip))
 					}
-					// Matroska Block/SimpleBlock contains exactly one frame when not laced. When laced,
-					// each lace is a complete frame. So packet boundaries are always frame-aligned.
-					probeMatroskaAudio(audioProbes, trackVal, audioPayload, 1, effectiveSize, true)
+					// For most codecs, Matroska Block/SimpleBlock boundaries are frame-aligned when laced
+					// (each lace is a frame). For non-laced E-AC-3, packets may contain multiple syncframes,
+					// so allow probe logic to treat the packet as not strictly aligned.
+					packetAligned := frameCount > 1
+					probeMatroskaAudio(audioProbes, trackVal, audioPayload, 1, effectiveSize, packetAligned)
 				}
 				if needVideo {
 					videoPayload := applyMatroskaVideoHeaderStrip(payload, videoProbe)
