@@ -586,14 +586,8 @@ func applyID3TextToGeneralJSON(dst map[string]string, raw map[string]string, tex
 	if v := text["TALB"]; v != "" {
 		set("Album", v)
 	}
-	if v := text["TPE2"]; v != "" {
-		set("Album_Performer", v)
-	}
 	if v := text["TPE1"]; v != "" {
 		set("Performer", v)
-		if dst["Album_Performer"] == "" {
-			set("Album_Performer", v)
-		}
 	}
 	if v := text["TIT2"]; v != "" {
 		set("Title", v)

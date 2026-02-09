@@ -134,6 +134,16 @@ func synchsafe32(b []byte) uint32 {
 	return (uint32(b[0]&0x7F) << 21) | (uint32(b[1]&0x7F) << 14) | (uint32(b[2]&0x7F) << 7) | uint32(b[3]&0x7F)
 }
 
+func indexUTF16TerminatorAligned(rd []byte) int {
+	// Find 0x00 0x00 on a 2-byte boundary to avoid matching the high byte of the final code unit.
+	for i := 0; i+1 < len(rd); i += 2 {
+		if rd[i] == 0x00 && rd[i+1] == 0x00 {
+			return i
+		}
+	}
+	return -1
+}
+
 func decodeID3Text(data []byte) string {
 	if len(data) < 2 {
 		return ""
@@ -241,7 +251,7 @@ func parseID3APIC(data []byte) (id3Picture, bool) {
 		}
 	} else {
 		// UTF-16: description ends with 0x00 0x00
-		if idx := bytes.Index(rd, []byte{0x00, 0x00}); idx >= 0 {
+		if idx := indexUTF16TerminatorAligned(rd); idx >= 0 {
 			desc = decodeID3Text(append([]byte{enc}, rd[:idx]...))
 			rd = rd[idx+2:]
 		}
@@ -275,7 +285,7 @@ func splitID3EncodedString(enc byte, rd []byte) (string, []byte, bool) {
 		s := decodeID3Text(append([]byte{enc}, rd...))
 		return s, nil, true
 	}
-	if i := bytes.Index(rd, []byte{0x00, 0x00}); i >= 0 {
+	if i := indexUTF16TerminatorAligned(rd); i >= 0 {
 		s := decodeID3Text(append([]byte{enc}, rd[:i]...))
 		return s, rd[i+2:], true
 	}
@@ -368,7 +378,7 @@ func parseID3TXXX(data []byte) (string, string, bool) {
 		}
 	} else {
 		// UTF-16: description ends with 0x00 0x00
-		if idx := bytes.Index(rd, []byte{0x00, 0x00}); idx >= 0 {
+		if idx := indexUTF16TerminatorAligned(rd); idx >= 0 {
 			desc = decodeID3Text(append([]byte{enc}, rd[:idx]...))
 			rd = rd[idx+2:]
 		} else {
