@@ -169,7 +169,6 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 	var primaryPMTPID uint16
 	var primaryProgramNumber uint16
 	pmtPIDToProgram := map[uint16]uint16{}
-	var pcrPID uint16
 	var serviceName string
 	var serviceProvider string
 	var serviceType string
@@ -182,14 +181,20 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 	hasMPEGVideo := false
 	var pcrPTS ptsTracker
 	var pcrFull pcrTracker
-	var lastPCR uint64 // 27MHz ticks
-	var lastPCRPacket int64
-	var hasPCR bool
-	var pcrBits float64
-	var pcrSeconds float64
+	// PCR spans (per PCR PID) for MediaInfo-like overall bitrate precision.
 	var pmtPointer int
 	var pmtSectionLen int
 	pmtAssemblies := map[uint16]*psiAssembly{}
+	pcrPIDs := map[uint16]struct{}{}
+
+	type pcrSpan struct {
+		startPCR    uint64
+		endPCR      uint64
+		startOffset int64
+		endOffset   int64
+		ok          bool
+	}
+	pcrSpans := map[uint16]*pcrSpan{}
 
 	const tsPacketSize = int64(188)
 	if packetSize != tsPacketSize && packetSize != 192 {
@@ -243,23 +248,24 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				adaptationLen := int(ts[4])
 				payloadIndex += 1 + adaptationLen
 			}
-			if pid == pcrPID {
+			if _, ok := pcrPIDs[pid]; ok {
 				if pcr27, ok := parsePCR27(ts); ok {
 					pcrFull.add(pcr27)
 					// Keep legacy 90kHz PCR base for fields/flows that expect it.
 					pcrPTS.add(pcr27 / 300)
-					if hasPCR && pcr27 > lastPCR && packetIndex > lastPCRPacket {
-						delta := pcr27 - lastPCR
-						seconds := float64(delta) / 27000000.0
-						if seconds > 0 {
-							bytesBetween := (packetIndex - lastPCRPacket) * packetSize
-							pcrBits += float64(bytesBetween * 8)
-							pcrSeconds += seconds
-						}
+					offset := (packetIndex - 1) * packetSize
+					span := pcrSpans[pid]
+					if span == nil {
+						span = &pcrSpan{}
+						pcrSpans[pid] = span
 					}
-					lastPCR = pcr27
-					lastPCRPacket = packetIndex
-					hasPCR = true
+					if !span.ok {
+						span.startPCR = pcr27
+						span.startOffset = offset
+						span.ok = true
+					}
+					span.endPCR = pcr27
+					span.endOffset = offset
 				}
 			}
 			if adaptation == 2 {
@@ -329,6 +335,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 					section := asm.buf[:asm.expected]
 					pmPayload := append([]byte{0}, section...)
 					parsed, pcr, pointer, sectionLen := parsePMT(pmPayload, programNumber)
+					if pcr != 0 {
+						pcrPIDs[pcr] = struct{}{}
+					}
 					// MediaInfo's General.StreamSize for BDAV behaves closer to counting
 					// non-A/V (subtitle) PMT entries than full PMT section payload.
 					textCount := 0
@@ -339,9 +348,6 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 					}
 					psiBytes += int64(textCount * 5)
 					if pid == primaryPMTPID {
-						if pcr != 0 {
-							pcrPID = pcr
-						}
 						if sectionLen > 0 {
 							pmtPointer = pointer
 							pmtSectionLen = sectionLen
@@ -512,14 +518,13 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 						}
 					}
 				}
-				if entry.kind == StreamAudio {
+				if entry.kind == StreamAudio && len(data) > 0 {
+					// Audio frames can be recovered mid-PES by resyncing on codec sync words.
+					// Don't drop buffered bytes at PES boundaries.
 					if !entry.audioStarted {
-						entry.audioBuffer = entry.audioBuffer[:0]
 						entry.audioStarted = true
 					}
-					if len(data) > 0 {
-						consumeAudio(entry, data)
-					}
+					consumeAudio(entry, data)
 				}
 
 				if _, ok := videoPIDs[pid]; ok {
@@ -548,7 +553,10 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(payloadData) > 0 {
 				consumeMPEG2TSVideo(entry, payloadData, entry.lastPTS, entry.hasLastPTS)
 			}
-			if entry.kind == StreamAudio && entry.audioStarted && len(payload) > 0 {
+			if entry.kind == StreamAudio && len(payload) > 0 {
+				if !entry.audioStarted {
+					entry.audioStarted = true
+				}
 				entry.bytes += uint64(len(payload))
 				consumeAudio(entry, payload)
 			}
@@ -1019,13 +1027,39 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 
 	info := ContainerInfo{}
 	var overallBitrate float64
-	if pcrSeconds > 0 && pcrBits > 0 && size > 0 {
-		overallBitrate = pcrBits / pcrSeconds
+	var durationCount int64
+	var durationSum27 int64
+	var bytesSum int64
+	for _, span := range pcrSpans {
+		if span == nil || !span.ok {
+			continue
+		}
+		if span.endPCR <= span.startPCR || span.endOffset <= span.startOffset {
+			continue
+		}
+		durationCount++
+		durationSum27 += int64(span.endPCR - span.startPCR)
+		bytesSum += span.endOffset - span.startOffset
+	}
+	if durationCount > 0 && durationSum27 > 0 && bytesSum > 0 && size > 0 {
+		overallBitrate = float64(bytesSum) / (float64(durationSum27) / (8 * 27000000.0))
 		if overallBitrate > 0 {
-			// MediaInfo reports a slightly wider precision band for TS/BDAV overall bitrate.
-			precision := overallBitrate / 7680.0
-			info.OverallBitrateMin = overallBitrate - precision
-			info.OverallBitrateMax = overallBitrate + precision
+			// MediaInfo precision band:
+			// OverallBitRate_Precision_{Min,Max} derived from 1-byte precision in the computed
+			// byte count per PCR span plus +/-500 us tolerance per PCR span (27MHz ticks).
+			//
+			// Ref: MediaInfoLib File_MpegTs.cpp (Bytes_Sum +/- Duration_Count, Duration_Sum +/- 13500*Duration_Count).
+			bytesSum := float64(bytesSum)
+			count := float64(durationCount)
+			durSum := float64(durationSum27)
+			denMin := (durSum + 13500.0*count) / 27000000.0
+			denMax := (durSum - 13500.0*count) / 27000000.0
+			if bytesSum-count > 0 && denMin > 0 {
+				info.OverallBitrateMin = (bytesSum - count) * 8 / denMin
+			}
+			if bytesSum+count > 0 && denMax > 0 {
+				info.OverallBitrateMax = (bytesSum + count) * 8 / denMax
+			}
 		}
 	}
 	if info.DurationSeconds == 0 {
@@ -1473,11 +1507,18 @@ func consumeAC3(entry *tsStream, payload []byte) {
 		if i+frameSize > len(entry.audioBuffer) {
 			break
 		}
+		// Avoid false-positive sync matches by requiring the next frame sync when available.
+		if i+frameSize+1 < len(entry.audioBuffer) {
+			if entry.audioBuffer[i+frameSize] != 0x0B || entry.audioBuffer[i+frameSize+1] != 0x77 {
+				i++
+				continue
+			}
+		}
 		entry.audioFrames++
 		entry.hasAC3 = true
 		// MediaInfo collects AC-3 metadata stats across a meaningful portion of the stream.
 		// Keep a cap to avoid worst-case work on very long files.
-		const maxStatsBytes = 8 * 1024 * 1024
+		const maxStatsBytes = 2 * 1024 * 1024
 		if entry.ac3StatsBytes < maxStatsBytes {
 			entry.ac3Info.mergeFrame(info)
 			entry.ac3StatsBytes += uint64(frameSize)
@@ -1514,6 +1555,13 @@ func consumeEAC3(entry *tsStream, payload []byte) {
 		}
 		if i+frameSize > len(entry.audioBuffer) {
 			break
+		}
+		// Avoid false-positive sync matches by requiring the next frame sync when available.
+		if i+frameSize+1 < len(entry.audioBuffer) {
+			if entry.audioBuffer[i+frameSize] != 0x0B || entry.audioBuffer[i+frameSize+1] != 0x77 {
+				i++
+				continue
+			}
 		}
 		entry.audioFrames++
 		entry.hasAC3 = true
