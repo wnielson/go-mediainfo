@@ -1091,13 +1091,13 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			if info.DurationSeconds > 0 {
 				general.JSON["Duration"] = formatJSONSeconds(info.DurationSeconds)
 			}
-				// Official mediainfo overall bitrate uses Duration in integer milliseconds for FLAC.
-				if info.DurationSeconds > 0 {
-					durationMs := int64(math.Round(info.DurationSeconds * 1000))
-					if durationMs > 0 {
-						general.JSON["OverallBitRate"] = strconv.FormatInt((stat.Size()*8000+durationMs/2)/durationMs, 10)
-					}
+			// Official mediainfo overall bitrate uses Duration in integer milliseconds for FLAC.
+			if info.DurationSeconds > 0 {
+				durationMs := int64(math.Round(info.DurationSeconds * 1000))
+				if durationMs > 0 {
+					general.JSON["OverallBitRate"] = strconv.FormatInt((stat.Size()*8000+durationMs/2)/durationMs, 10)
 				}
+			}
 			// Official mediainfo sets General StreamSize=0 for FLAC.
 			general.JSON["StreamSize"] = "0"
 			if len(tagJSON) > 0 {
