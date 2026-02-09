@@ -17,6 +17,7 @@ type psStreamParser struct {
 	packetOrder  int
 	quickAC3     bool
 	quickAC3Max  uint64
+	sampled      bool
 }
 
 type psPending struct {
@@ -459,7 +460,9 @@ func ParseMPEGPSFiles(paths []string, size int64, opts mpegPSOptions) (Container
 	if !parsedAny {
 		return ContainerInfo{}, nil, false
 	}
-	return finalizeMPEGPS(parser.streams, parser.streamOrder, parser.videoParsers, parser.videoPTS, parser.anyPTS, size, opts)
+	opts2 := opts
+	opts2.sampled = parser.sampled
+	return finalizeMPEGPS(parser.streams, parser.streamOrder, parser.videoParsers, parser.videoPTS, parser.anyPTS, size, opts2)
 }
 
 func parseMPEGPSFileSample(parser *psStreamParser, file *os.File, opts mpegPSOptions) bool {
@@ -496,6 +499,7 @@ func parseMPEGPSFileSample(parser *psStreamParser, file *os.File, opts mpegPSOpt
 	}
 
 	parsedAny := false
+	parser.sampled = true
 	first := io.NewSectionReader(file, 0, sampleSize)
 	if reader(first) {
 		parsedAny = true

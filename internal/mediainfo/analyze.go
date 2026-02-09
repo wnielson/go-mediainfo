@@ -1075,8 +1075,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 
 			// Mirror MediaInfoLib's Streams_Finish_InterStreams video bitrate/stream size heuristic:
-			// For MPEG-PS, ratios are 0.99 and minus values are 0. This is required for 1:1 parity
-			// on VOB/MPEG-PS where MediaInfo derives video size from overall + other stream bitrates.
+			// For MPEG-PS, ratios are 0.99 and minus values are 0.
 			if videoCount == 1 && videoIndex >= 0 && bitratesOK && info.DurationSeconds > 0 && general.JSON["OverallBitRate"] != "" {
 				overallBitRate, err := strconv.ParseFloat(general.JSON["OverallBitRate"], 64)
 				if err == nil && overallBitRate > 0 {
@@ -1097,8 +1096,6 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 											if fr, err := strconv.ParseFloat(frValue, 64); err == nil && fr > 0 {
 												durationMs = parsed * 1000 / fr
 											}
-										} else if num, den, ok := parseFrameRateRatio(frField); ok && num > 0 && den > 0 {
-											durationMs = parsed * 1000 * float64(den) / float64(num)
 										}
 									}
 								}

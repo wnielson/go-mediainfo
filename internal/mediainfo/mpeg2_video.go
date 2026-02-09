@@ -419,8 +419,6 @@ func (p *mpeg2VideoParser) parseGOPHeader(data []byte) {
 		p.firstGOPClosed = &closedBool
 		if closedBool {
 			p.info.GOPFirstClosed = "Closed"
-		} else {
-			p.info.GOPFirstClosed = "Open"
 		}
 	}
 	if p.info.GOPDropFrame == nil {
@@ -440,6 +438,10 @@ func (p *mpeg2VideoParser) parseGOPHeader(data []byte) {
 	}
 
 	if p.sawGOP && p.currentGOPCount > 0 {
+		if p.gopLengthCounts == nil {
+			p.gopLengthCounts = map[int]int{}
+		}
+		p.gopLengthCounts[p.currentGOPCount]++
 		if p.gopLength == 0 {
 			p.gopLength = p.currentGOPCount
 		}
