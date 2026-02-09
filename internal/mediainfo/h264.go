@@ -10,6 +10,9 @@ type h264SPSInfo struct {
 	RefFrames               int
 	Progressive             bool
 	HasScanType             bool
+	SARWidth                uint32
+	SARHeight               uint32
+	HasSAR                  bool
 	VideoFormat             int
 	HasVideoFmt             bool
 	ColorRange              string
@@ -170,6 +173,9 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	separateColourPlane := 0
 	videoFormat := 0
 	hasVideoFormat := false
+	sarWidth := uint32(1)
+	sarHeight := uint32(1)
+	hasSAR := false
 	colorRange := ""
 	hasColorRange := false
 	colorPrimaries := ""
@@ -283,8 +289,19 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		if br.readBitsValue(1) == 1 {
 			aspectRatioIDC := br.readBitsValue(8)
 			if aspectRatioIDC == 255 {
-				_ = br.readBitsValue(16)
-				_ = br.readBitsValue(16)
+				w := br.readBitsValue(16)
+				h := br.readBitsValue(16)
+				if w != ^uint64(0) && h != ^uint64(0) && w > 0 && h > 0 {
+					sarWidth = uint32(w)
+					sarHeight = uint32(h)
+					hasSAR = true
+				}
+			} else {
+				if w, h, ok := h264SARFromIDC(aspectRatioIDC); ok {
+					sarWidth = w
+					sarHeight = h
+					hasSAR = true
+				}
 			}
 		}
 		if br.readBitsValue(1) == 1 {
@@ -363,6 +380,9 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		RefFrames:               refFrames,
 		Progressive:             progressive,
 		HasScanType:             true,
+		SARWidth:                sarWidth,
+		SARHeight:               sarHeight,
+		HasSAR:                  hasSAR,
 		VideoFormat:             videoFormat,
 		HasVideoFmt:             hasVideoFormat,
 		ColorRange:              colorRange,
@@ -389,6 +409,45 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	}
 	info.ChromaFormat = chromaFormatString(chromaFormat)
 	return info
+}
+
+func h264SARFromIDC(idc uint64) (uint32, uint32, bool) {
+	switch idc {
+	case 1:
+		return 1, 1, true
+	case 2:
+		return 12, 11, true
+	case 3:
+		return 10, 11, true
+	case 4:
+		return 16, 11, true
+	case 5:
+		return 40, 33, true
+	case 6:
+		return 24, 11, true
+	case 7:
+		return 20, 11, true
+	case 8:
+		return 32, 11, true
+	case 9:
+		return 80, 33, true
+	case 10:
+		return 18, 11, true
+	case 11:
+		return 15, 11, true
+	case 12:
+		return 64, 33, true
+	case 13:
+		return 160, 99, true
+	case 14:
+		return 4, 3, true
+	case 15:
+		return 3, 2, true
+	case 16:
+		return 2, 1, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func parseH264HRD(br *bitReader) (int64, int64, bool, bool) {

@@ -1564,9 +1564,12 @@ func applyX264Info(file io.ReadSeeker, streams []Stream, opts x264InfoOptions) {
 		return
 	}
 	// MP4 can embed x264 strings inside the first few MB of mdat, not just moov/udta.
-	sniff := make([]byte, 2<<20)
+	sniff := make([]byte, 4<<20)
 	n, _ := io.ReadFull(file, sniff)
 	writingLib, encoding := findX264Info(sniff[:n])
+	if writingLib == "" && encoding == "" {
+		writingLib = findH264WritingLibrary(sniff[:n])
+	}
 	if writingLib == "" && encoding == "" {
 		// MP4 often stores writing-library strings late in the moov/udta metadata.
 		if end, err := file.Seek(0, io.SeekEnd); err == nil && end > 0 {
@@ -1578,6 +1581,9 @@ func applyX264Info(file io.ReadSeeker, streams []Stream, opts x264InfoOptions) {
 				n2, _ := file.Read(sniff)
 				if n2 > 0 {
 					writingLib, encoding = findX264Info(sniff[:n2])
+					if writingLib == "" && encoding == "" {
+						writingLib = findH264WritingLibrary(sniff[:n2])
+					}
 				}
 			}
 		}
@@ -1593,6 +1599,13 @@ func applyX264Info(file io.ReadSeeker, streams []Stream, opts x264InfoOptions) {
 		if writingLib != "" {
 			if !opts.skipWritingLibIfExists || findField(streams[i].Fields, "Writing library") == "" {
 				streams[i].Fields = appendFieldUnique(streams[i].Fields, Field{Name: "Writing library", Value: writingLib})
+			}
+			// Some encoders (non-x264) expect Encoded_Library_Name to mirror the full string.
+			if encoding == "" && strings.Contains(writingLib, "Encoder") {
+				if streams[i].JSON == nil {
+					streams[i].JSON = map[string]string{}
+				}
+				streams[i].JSON["Encoded_Library_Name"] = writingLib
 			}
 		}
 		if encoding != "" {

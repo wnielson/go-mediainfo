@@ -205,6 +205,11 @@ func parseVisualSampleEntry(entry []byte, sampleType string) sampleEntryResult {
 					jsonExtras["matrix_coefficients_Source"] = colorSource
 				}
 			}
+			if spsInfo.HasSAR && spsInfo.SARWidth > 0 && spsInfo.SARHeight > 0 && spsInfo.SARWidth != spsInfo.SARHeight && width > 0 && height > 0 {
+				par := float64(spsInfo.SARWidth) / float64(spsInfo.SARHeight)
+				jsonExtras["PixelAspectRatio"] = formatJSONFloat(par)
+				jsonExtras["DisplayAspectRatio_Original"] = formatJSONFloat((float64(width) / float64(height)) * par)
+			}
 		} else if payload, ok := findMP4BoxByName(entry, "avcC"); ok {
 			_, avcFields, parsedSPS := parseAVCConfig(payload)
 			spsInfo = parsedSPS
@@ -240,6 +245,11 @@ func parseVisualSampleEntry(entry []byte, sampleType string) sampleEntryResult {
 					jsonExtras["matrix_coefficients"] = spsInfo.MatrixCoefficients
 					jsonExtras["matrix_coefficients_Source"] = colorSource
 				}
+			}
+			if spsInfo.HasSAR && spsInfo.SARWidth > 0 && spsInfo.SARHeight > 0 && spsInfo.SARWidth != spsInfo.SARHeight && width > 0 && height > 0 {
+				par := float64(spsInfo.SARWidth) / float64(spsInfo.SARHeight)
+				jsonExtras["PixelAspectRatio"] = formatJSONFloat(par)
+				jsonExtras["DisplayAspectRatio_Original"] = formatJSONFloat((float64(width) / float64(height)) * par)
 			}
 		}
 		fields = appendFieldUnique(fields, Field{Name: "Color space", Value: "YUV"})

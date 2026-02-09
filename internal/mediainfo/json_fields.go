@@ -98,6 +98,20 @@ func normalizeContainerComputedJSON(kind StreamKind, fields []jsonKV, containerF
 			fields = setJSONField(fields, "DisplayAspectRatio", formatJSONFloat(width/height))
 		}
 	}
+	if kind == StreamVideo && (strings.EqualFold(containerFormat, "MPEG-4") || strings.EqualFold(containerFormat, "QuickTime")) {
+		width, _ := strconv.ParseFloat(jsonFieldValue(fields, "Width"), 64)
+		height, _ := strconv.ParseFloat(jsonFieldValue(fields, "Height"), 64)
+		par, _ := strconv.ParseFloat(jsonFieldValue(fields, "PixelAspectRatio"), 64)
+		if width > 0 && height > 0 && par > 0 && math.Abs(par-1.0) > 0.0005 {
+			dar := (width / height) * par
+			fields = setJSONField(fields, "DisplayAspectRatio", formatJSONFloat(dar))
+			// Some streams have a non-1:1 SAR in the bitstream; when we know the exact ratio we
+			// will emit DisplayAspectRatio_Original from the codec parser. Keep a fallback here.
+			if jsonFieldValue(fields, "DisplayAspectRatio_Original") == "" {
+				fields = setJSONField(fields, "DisplayAspectRatio_Original", formatJSONFloatTrunc(dar))
+			}
+		}
+	}
 	return fields
 }
 
@@ -744,6 +758,11 @@ func parseSampleRate(value string) (int64, bool) {
 
 func formatJSONFloat(value float64) string {
 	return fmt.Sprintf("%.3f", value)
+}
+
+func formatJSONFloatTrunc(value float64) string {
+	truncated := math.Trunc(value*1000.0) / 1000.0
+	return fmt.Sprintf("%.3f", truncated)
 }
 
 func trimFloat(value float64) string {
