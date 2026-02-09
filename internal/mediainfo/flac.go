@@ -369,12 +369,11 @@ func flacTagsToGeneralJSON(tags map[string]string, encoder string) (map[string]s
 		set("Album", v)
 		mapped["ALBUM"] = true
 	}
-	if v := tags["ALBUMARTIST"]; v != "" {
-		// MediaInfo only emits Album_Performer when it differs from Performer.
-		if tags["ARTIST"] == "" || tags["ARTIST"] != v {
-			set("Album_Performer", v)
-		}
-		mapped["ALBUMARTIST"] = true
+	if v := firstNonEmpty(tags["ALBUMARTIST"], tags["ALBUM_ARTIST"], tags["ALBUM ARTIST"]); v != "" {
+		set("Album_Performer", v)
+		mapped["ALBUMARTIST"] = tags["ALBUMARTIST"] != ""
+		mapped["ALBUM_ARTIST"] = tags["ALBUM_ARTIST"] != ""
+		mapped["ALBUM ARTIST"] = tags["ALBUM ARTIST"] != ""
 	}
 	if v := tags["ARTIST"]; v != "" {
 		set("Performer", v)
