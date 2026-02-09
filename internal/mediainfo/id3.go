@@ -9,6 +9,7 @@ import (
 )
 
 type id3Picture struct {
+	Type        byte
 	MIME        string
 	Description string
 	DataHead    []byte
@@ -94,9 +95,13 @@ func parseID3v2(file io.ReadSeeker) (id3v2Data, bool) {
 
 		data := rd[10 : 10+size]
 		switch id {
-		case "TIT2", "TALB", "TPE1", "TPE2", "TENC", "TRCK", "TYER", "TDRC":
+		case "TIT2", "TALB", "TPE1", "TPE2", "TENC", "TRCK", "TYER", "TDRC", "TCON", "TPUB", "TPOS", "TDAT", "TSSE":
 			if v := decodeID3Text(data); v != "" {
 				text[id] = normalizeID3Multi(v)
+			}
+		case "TXXX":
+			if desc, value, ok := parseID3TXXX(data); ok && desc != "" && value != "" {
+				text["TXXX:"+desc] = normalizeID3Multi(value)
 			}
 		case "APIC":
 			if pic, ok := parseID3APIC(data); ok {
@@ -144,7 +149,11 @@ func decodeID3Text(data []byte) string {
 				raw = raw[2:]
 			}
 		}
-		raw = bytes.TrimRight(raw, "\x00")
+		// Trim trailing UTF-16 NUL terminators (0x00 0x00), but do not trim single 0x00 bytes,
+		// otherwise we can drop the last code unit (e.g., "...!" -> "...").
+		for len(raw) >= 2 && raw[len(raw)-1] == 0x00 && raw[len(raw)-2] == 0x00 {
+			raw = raw[:len(raw)-2]
+		}
 		if len(raw)%2 == 1 {
 			raw = raw[:len(raw)-1]
 		}
@@ -194,7 +203,7 @@ func parseID3APIC(data []byte) (id3Picture, bool) {
 	if len(rd) < 2 {
 		return id3Picture{}, false
 	}
-	_ = rd[0] // picture type
+	picType := rd[0]
 	rd = rd[1:]
 
 	desc := ""
@@ -210,9 +219,6 @@ func parseID3APIC(data []byte) (id3Picture, bool) {
 			rd = rd[idx+2:]
 		}
 	}
-	if desc == "" {
-		desc = "Image"
-	}
 	if len(rd) == 0 {
 		return id3Picture{}, false
 	}
@@ -221,9 +227,46 @@ func parseID3APIC(data []byte) (id3Picture, bool) {
 		head = head[:64<<10]
 	}
 	return id3Picture{
+		Type:        picType,
 		MIME:        mime,
 		Description: desc,
 		DataHead:    append([]byte(nil), head...),
 		DataSize:    int64(len(rd)),
 	}, true
+}
+
+func parseID3TXXX(data []byte) (string, string, bool) {
+	if len(data) < 2 {
+		return "", "", false
+	}
+	enc := data[0]
+	rd := data[1:]
+
+	desc := ""
+	value := ""
+	if enc == 0x00 || enc == 0x03 {
+		if idx := bytes.IndexByte(rd, 0x00); idx >= 0 {
+			desc = strings.TrimSpace(string(rd[:idx]))
+			rd = rd[idx+1:]
+		} else {
+			return "", "", false
+		}
+	} else {
+		// UTF-16: description ends with 0x00 0x00
+		if idx := bytes.Index(rd, []byte{0x00, 0x00}); idx >= 0 {
+			desc = decodeID3Text(append([]byte{enc}, rd[:idx]...))
+			rd = rd[idx+2:]
+		} else {
+			return "", "", false
+		}
+	}
+	if len(rd) > 0 {
+		value = decodeID3Text(append([]byte{enc}, rd...))
+	}
+	desc = strings.TrimSpace(desc)
+	value = strings.TrimSpace(value)
+	if desc == "" || value == "" {
+		return "", "", false
+	}
+	return desc, value, true
 }

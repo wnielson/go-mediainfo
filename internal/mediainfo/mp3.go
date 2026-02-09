@@ -6,12 +6,14 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 )
 
 type mp3HeaderInfo struct {
 	bitrateKbps int
 	sampleRate  int
 	channels    int
+	channelMode byte
 	versionID   byte
 	layerID     byte
 	padding     bool
@@ -58,14 +60,19 @@ func ParseMP3(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[stri
 	if header.sampleRate > 0 {
 		if xingTag != "" && headerIndex >= 0 && headerIndex < len(probe) {
 			if frames, bytes, ok := parseXingInfo(probe[headerIndex:], header, xingTag); ok && frames > 0 {
+				frameLen := mp3FrameLengthBytes(header)
 				frameCount = frames
 				payloadBytes = bytes
-				// CBR "Info" headers can include a byte count that doesn't match MediaInfo's audio payload size.
-				// Prefer deriving from frame count for "Info".
-				if frameLen := mp3FrameLengthBytes(header); frameLen > 0 && xingTag == "Info" {
-					payloadBytes = frameCount * int64(frameLen)
-				} else if payloadBytes == 0 && frameLen > 0 {
-					payloadBytes = frameCount * int64(frameLen)
+				if frameLen > 0 {
+					// MediaInfo's StreamSize excludes the initial Info/Xing header frame.
+					if payloadBytes > int64(frameLen) {
+						payloadBytes -= int64(frameLen)
+					} else if payloadBytes == 0 {
+						payloadBytes = frameCount * int64(frameLen)
+						if payloadBytes > int64(frameLen) {
+							payloadBytes -= int64(frameLen)
+						}
+					}
 				}
 				duration = (float64(frameCount) * samplesPerFrame) / float64(header.sampleRate)
 			}
@@ -145,15 +152,26 @@ func ParseMP3(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[stri
 			streamJSON["FrameRate"] = formatJSONFloat(float64(frameCount) / duration)
 		}
 	}
+
+	// Format settings mode: MediaInfo appears to take it from the first audio frame after an Info header.
+	if header.channels == 2 {
+		effective := header.channelMode
+		if frameLen := mp3FrameLengthBytes(header); xingTag != "" && headerIndex >= 0 && frameLen > 0 && headerIndex+frameLen+4 <= len(probe) {
+			if next, ok := parseMP3Header(probe[headerIndex+frameLen : headerIndex+frameLen+4]); ok {
+				if next.sampleRate == header.sampleRate && next.bitrateKbps == header.bitrateKbps && next.channels == header.channels && next.versionID == header.versionID && next.layerID == header.layerID {
+					effective = next.channelMode
+				}
+			}
+		}
+		if effective == 0x01 {
+			streamJSON["Format_Settings_Mode"] = "Joint stereo"
+		}
+	}
 	if encodedLibrary != "" {
 		streamJSON["Encoded_Library"] = encodedLibrary
 	}
 
 	generalJSON := map[string]string{}
-	if xingTag != "" {
-		// MediaInfo only emits General OverallBitRate_Mode for some MP3s (notably when an Info/Xing header exists).
-		generalJSON["OverallBitRate_Mode"] = modeJSON
-	}
 	if encodedLibrary != "" {
 		generalJSON["Encoded_Library"] = encodedLibrary
 	}
@@ -162,38 +180,80 @@ func ParseMP3(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, map[stri
 	streams := []Stream{{Kind: StreamAudio, Fields: fields, JSON: streamJSON, JSONSkipStreamOrder: true, JSONSkipComputed: true}}
 	if len(id3.Pictures) > 0 {
 		pic := id3.Pictures[0]
-		imgJSON := map[string]string{
-			"Format":           "JPEG",
-			"Compression_Mode": "Lossy",
-			"StreamSize":       strconv.FormatInt(pic.DataSize, 10),
+		for i := range id3.Pictures {
+			if id3.Pictures[i].Type == 0x03 { // Cover (front)
+				pic = id3.Pictures[i]
+				break
+			}
 		}
-		if info, ok := parseJPEGInfo(pic.DataHead); ok {
-			if info.Width > 0 {
-				imgJSON["Width"] = strconv.Itoa(info.Width)
+		mime := strings.ToLower(strings.TrimSpace(pic.MIME))
+
+		imgJSON := map[string]string{
+			"StreamSize": strconv.FormatInt(pic.DataSize, 10),
+		}
+		if mime == "image/png" || bytes.HasPrefix(pic.DataHead, []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}) {
+			imgJSON["Format"] = "PNG"
+			imgJSON["Compression_Mode"] = "Lossless"
+			imgJSON["Format_Compression"] = "Deflate"
+			if info, ok := parsePNGInfo(pic.DataHead); ok {
+				if info.Width > 0 {
+					imgJSON["Width"] = strconv.Itoa(info.Width)
+				}
+				if info.Height > 0 {
+					imgJSON["Height"] = strconv.Itoa(info.Height)
+				}
+				if info.BitDepth > 0 {
+					imgJSON["BitDepth"] = strconv.Itoa(info.BitDepth)
+				}
+				if info.ColorSpace != "" {
+					imgJSON["ColorSpace"] = info.ColorSpace
+				}
 			}
-			if info.Height > 0 {
-				imgJSON["Height"] = strconv.Itoa(info.Height)
-			}
-			if info.BitDepth > 0 {
-				imgJSON["BitDepth"] = strconv.Itoa(info.BitDepth)
-			}
-			if info.ColorSpace != "" {
-				imgJSON["ColorSpace"] = info.ColorSpace
-			}
-			if info.ChromaSubsample != "" {
-				imgJSON["ChromaSubsampling"] = info.ChromaSubsample
+		} else {
+			imgJSON["Format"] = "JPEG"
+			imgJSON["Compression_Mode"] = "Lossy"
+			if info, ok := parseJPEGInfo(pic.DataHead); ok {
+				if info.Width > 0 {
+					imgJSON["Width"] = strconv.Itoa(info.Width)
+				}
+				if info.Height > 0 {
+					imgJSON["Height"] = strconv.Itoa(info.Height)
+				}
+				if info.BitDepth > 0 {
+					imgJSON["BitDepth"] = strconv.Itoa(info.BitDepth)
+				}
+				if info.ColorSpace != "" {
+					imgJSON["ColorSpace"] = info.ColorSpace
+				}
+				if info.ChromaSubsample != "" {
+					imgJSON["ChromaSubsampling"] = info.ChromaSubsample
+				}
 			}
 		}
 		streams = append(streams, Stream{Kind: StreamImage, JSON: imgJSON, JSONSkipStreamOrder: true, JSONSkipComputed: true})
 
 		generalJSON["Cover"] = "Yes"
-		generalJSON["Cover_Description"] = pic.Description
-		if pic.MIME != "" {
+		if pic.Type == 0x03 {
+			generalJSON["Cover_Type"] = "Cover (front)"
+		} else if pic.Type == 0x04 {
+			generalJSON["Cover_Type"] = "Cover (back)"
+		}
+		if pic.Description != "" {
+			generalJSON["Cover_Description"] = pic.Description
+		}
+		if mime != "" {
+			generalJSON["Cover_Mime"] = mime
+		} else if pic.MIME != "" {
 			generalJSON["Cover_Mime"] = pic.MIME
 		}
 	}
 	if id3.Text != nil {
 		applyID3TextToGeneralJSON(generalJSON, generalJSONRaw, id3.Text)
+	}
+
+	// MediaInfo appears to omit General OverallBitRate_Mode when a cover is present.
+	if xingTag != "" && generalJSON["Cover"] == "" {
+		generalJSON["OverallBitRate_Mode"] = modeJSON
 	}
 
 	if len(generalJSON) == 0 {
@@ -269,6 +329,7 @@ func parseMP3Header(header []byte) (mp3HeaderInfo, bool) {
 		bitrateKbps: bitrate,
 		sampleRate:  sampleRate,
 		channels:    channels,
+		channelMode: channelMode,
 		versionID:   versionID,
 		layerID:     layerID,
 		padding:     padding,
@@ -443,7 +504,8 @@ func findLAMELibrary(buf []byte) string {
 	rest := buf[idx+4:]
 	out := make([]byte, 0, 16)
 	out = append(out, []byte("LAME")...)
-	for i := 0; i < len(rest) && len(out) < 12; i++ {
+	i := 0
+	for ; i < len(rest) && len(out) < 12; i++ {
 		c := rest[i]
 		if (c >= '0' && c <= '9') || c == '.' {
 			out = append(out, c)
@@ -454,7 +516,34 @@ func findLAMELibrary(buf []byte) string {
 	if len(out) <= 4 {
 		return ""
 	}
-	return string(out)
+	// MediaInfo appends a few bytes from the LAME header (ISO-8859-1), e.g. "UUUÀ".
+	tail := make([]byte, 0, 4)
+	hitNUL := false
+	for j := i; j < len(rest) && len(tail) < 4; j++ {
+		if rest[j] == 0x00 {
+			hitNUL = true
+			break
+		}
+		tail = append(tail, rest[j])
+	}
+	// If we didn't see a terminator within the short tail window, don't append anything.
+	if !hitNUL && i+len(tail) < len(rest) && rest[i+len(tail)] == 0x00 {
+		hitNUL = true
+	}
+	if len(tail) == 0 || !hitNUL {
+		return string(out)
+	}
+	if !(tail[0] >= '0' && tail[0] <= '9') && !(tail[0] >= 'A' && tail[0] <= 'Z') && !(tail[0] >= 'a' && tail[0] <= 'z') {
+		return string(out)
+	}
+	runes := make([]rune, 0, len(out)+len(tail))
+	for _, b := range out {
+		runes = append(runes, rune(b))
+	}
+	for _, b := range tail {
+		runes = append(runes, rune(b))
+	}
+	return string(runes)
 }
 
 func applyID3TextToGeneralJSON(dst map[string]string, raw map[string]string, text map[string]string) {
@@ -485,13 +574,53 @@ func applyID3TextToGeneralJSON(dst map[string]string, raw map[string]string, tex
 	if v := text["TENC"]; v != "" {
 		set("EncodedBy", v)
 	}
-	if v := firstNonEmpty(text["TDRC"], text["TYER"]); v != "" {
-		// MediaInfo generally prints just the year.
-		if len(v) >= 4 && isAllDigits(v[0:4]) {
-			set("Recorded_Date", v[0:4])
+	if v := text["TCON"]; v != "" {
+		set("Genre", v)
+	}
+	if v := text["TPUB"]; v != "" {
+		set("Publisher", v)
+	}
+	if v := text["TPOS"]; v != "" {
+		// "1/2" -> "1"
+		if i := strings.IndexByte(v, '/'); i > 0 {
+			v = v[:i]
+		}
+		set("Part_Position", strings.TrimSpace(v))
+	}
+
+	// Recorded date: prefer full date when available.
+	if v := text["TDRC"]; v != "" {
+		// Common formats: "YYYY", "YYYY-MM-DD", "YYYY-MM-DDTHH:MM:SS".
+		if i := strings.IndexByte(v, 'T'); i > 0 {
+			v = v[:i]
+		}
+		set("Recorded_Date", strings.TrimSpace(v))
+	} else if year := text["TYER"]; year != "" && len(year) >= 4 && isAllDigits(year[:4]) {
+		if d := text["TDAT"]; len(d) == 4 && isAllDigits(d) {
+			day := d[:2]
+			mon := d[2:]
+			set("Recorded_Date", year[:4]+"-"+mon+"-"+day)
 		} else {
-			set("Recorded_Date", v)
+			set("Recorded_Date", year[:4])
 		}
 	}
-	_ = raw
+
+	// User-defined text frames.
+	if v := text["TXXX:ISRC"]; v != "" {
+		set("ISRC", v)
+	}
+	extras := []jsonKV{}
+	for k, v := range text {
+		if !strings.HasPrefix(k, "TXXX:") {
+			continue
+		}
+		name := strings.TrimPrefix(k, "TXXX:")
+		if name == "" || v == "" || name == "ISRC" {
+			continue
+		}
+		extras = append(extras, jsonKV{Key: name, Val: v})
+	}
+	if len(extras) > 0 && raw != nil {
+		raw["extra"] = renderJSONObject(extras, false)
+	}
 }
