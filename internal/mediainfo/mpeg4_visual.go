@@ -13,11 +13,14 @@ type mpeg4VisualInfo struct {
 	ChromaSubsampling string
 	BitDepth          string
 	ScanType          string
+	ScanOrder         string
 	WritingLibrary    string
 }
 
 func parseMPEG4Visual(data []byte) mpeg4VisualInfo {
 	info := mpeg4VisualInfo{}
+	var volTimeRes uint64
+	var volInterlaced bool
 	startCodes := findMPEG4StartCodes(data)
 	for i, sc := range startCodes {
 		if sc.code == 0xB0 && sc.pos+4 < len(data) {
@@ -45,6 +48,8 @@ func parseMPEG4Visual(data []byte) mpeg4VisualInfo {
 		if sc.code >= 0x20 && sc.code <= 0x2F {
 			if sc.pos+4 < len(data) {
 				vol := parseMPEG4VOL(data[sc.pos+4:])
+				volTimeRes = vol.TimeIncrementResolution
+				volInterlaced = vol.Interlaced
 				if vol.ChromaSubsampling != "" {
 					info.ChromaSubsampling = vol.ChromaSubsampling
 					info.ColorSpace = "YUV"
@@ -66,6 +71,15 @@ func parseMPEG4Visual(data []byte) mpeg4VisualInfo {
 			}
 		}
 		if sc.code == 0xB6 && sc.pos+4 < len(data) {
+			if volInterlaced && volTimeRes > 0 && info.ScanOrder == "" {
+				if top, ok := parseMPEG4VOPTopFieldFirst(data[sc.pos+4:], volTimeRes); ok {
+					if top {
+						info.ScanOrder = "TFF"
+					} else {
+						info.ScanOrder = "BFF"
+					}
+				}
+			}
 			vopType := (data[sc.pos+4] >> 6) & 0x03
 			if vopType == 2 {
 				val := true
@@ -100,6 +114,37 @@ func parseMPEG4Visual(data []byte) mpeg4VisualInfo {
 	return info
 }
 
+func parseMPEG4VOPTopFieldFirst(data []byte, timeIncrementResolution uint64) (bool, bool) {
+	// MPEG-4 Visual VOP header parsing (subset): extract top_field_first when VOL is interlaced.
+	// ISO/IEC 14496-2.
+	if len(data) == 0 || timeIncrementResolution == 0 {
+		return false, false
+	}
+	br := newMPEG4BitReader(data)
+	vopType := br.readBitsValue(2)
+	// modulo_time_base: loop over 1 bits.
+	for br.readBitsValue(1) == 1 {
+	}
+	_ = br.readBitsValue(1) // marker
+	bits := bitLength(timeIncrementResolution - 1)
+	if bits > 0 {
+		_ = br.readBitsValue(uint8(bits)) // vop_time_increment
+	}
+	_ = br.readBitsValue(1) // marker
+	vopCoded := br.readBitsValue(1)
+	if vopCoded == 0 {
+		return false, false
+	}
+	// vop_rounding_type is present for P-VOP.
+	if vopType == 1 {
+		_ = br.readBitsValue(1)
+	}
+	_ = br.readBitsValue(3) // intra_dc_vlc_thr
+	top := br.readBitsValue(1) == 1
+	_ = br.readBitsValue(1) // alternate_vertical_scan_flag
+	return top, true
+}
+
 type mpeg4StartCode struct {
 	pos  int
 	code byte
@@ -116,13 +161,15 @@ func findMPEG4StartCodes(data []byte) []mpeg4StartCode {
 }
 
 type mpeg4VOLInfo struct {
-	ChromaSubsampling string
-	BitDepth          string
-	ScanType          string
-	QPel              *bool
-	GMC               string
-	Matrix            string
-	MatrixData        string
+	ChromaSubsampling       string
+	BitDepth                string
+	ScanType                string
+	Interlaced              bool
+	TimeIncrementResolution uint64
+	QPel                    *bool
+	GMC                     string
+	Matrix                  string
+	MatrixData              string
 }
 
 func parseMPEG4VOL(data []byte) mpeg4VOLInfo {
@@ -226,6 +273,8 @@ func parseMPEG4VOL(data []byte) mpeg4VOLInfo {
 	info := mpeg4VOLInfo{}
 	info.ChromaSubsampling = mapMPEG4Chroma(chromaFormat)
 	info.BitDepth = "8 bits"
+	info.Interlaced = interlaced
+	info.TimeIncrementResolution = vopTimeIncrementResolution
 	if interlaced {
 		info.ScanType = "Interlaced"
 	} else {

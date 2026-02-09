@@ -1347,6 +1347,30 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
 			streams = parsedStreams
+			isDivX := false
+			for _, stream := range streams {
+				if stream.Kind != StreamVideo {
+					continue
+				}
+				for _, field := range stream.Fields {
+					if field.Name == "Codec ID" && field.Value == "DX50" {
+						isDivX = true
+						break
+					}
+				}
+				if isDivX {
+					break
+				}
+			}
+			if isDivX {
+				// MediaInfo labels DX50-in-AVI as DivX and reports an expected extension of .divx.
+				general.Fields = setFieldValue(general.Fields, "Format", "DivX")
+				general.Fields = appendFieldUnique(general.Fields, Field{Name: "FileExtension_Invalid", Value: "divx"})
+				if general.JSONRaw == nil {
+					general.JSONRaw = map[string]string{}
+				}
+				general.JSONRaw["extra"] = "{\"FileExtension_Invalid\":\"divx\"}"
+			}
 			if interleaved != "" {
 				general.JSON["Interleaved"] = interleaved
 			}

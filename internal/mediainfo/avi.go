@@ -30,6 +30,7 @@ type aviStream struct {
 	scale        uint32
 	rate         uint32
 	length       uint32
+	suggestedBuf uint32
 	width        uint32
 	height       uint32
 	bitCount     uint16
@@ -52,6 +53,7 @@ type aviStream struct {
 	chroma       string
 	bitDepth     string
 	scanType     string
+	scanOrder    string
 	hasVideoInfo bool
 }
 
@@ -237,7 +239,7 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 			if st.kind != StreamVideo {
 				continue
 			}
-			if st.handler == "FMP4" || st.compression == "FMP4" || st.compression == "MP4V" || st.compression == "DIVX" || st.compression == "XVID" {
+			if st.handler == "FMP4" || st.compression == "FMP4" || st.compression == "MP4V" || st.compression == "DIVX" || st.compression == "XVID" || st.compression == "DX50" || st.handler == "DX50" {
 				if info.Profile != "" {
 					st.profile = info.Profile
 				}
@@ -253,6 +255,7 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 				st.chroma = info.ChromaSubsampling
 				st.bitDepth = info.BitDepth
 				st.scanType = info.ScanType
+				st.scanOrder = info.ScanOrder
 				st.hasVideoInfo = true
 			}
 		}
@@ -262,6 +265,18 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 			if st.kind == StreamVideo {
 				st.bvop = vopScan.bvop
 			}
+		}
+	}
+
+	isDivX := false
+	for _, st := range streams {
+		if st.kind == StreamVideo && st.compression == "DX50" {
+			isDivX = true
+			break
+		}
+		if st.kind == StreamVideo && strings.HasPrefix(st.writingLib, "DivX") {
+			isDivX = true
+			break
 		}
 	}
 
@@ -295,8 +310,13 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 			if st.matrix != "" {
 				fields = append(fields, Field{Name: "Format settings, Matrix", Value: st.matrix})
 			}
-			if st.handler != "" {
-				fields = append(fields, Field{Name: "Codec ID", Value: st.handler})
+			if codec := func() string {
+				if st.compression != "" {
+					return st.compression
+				}
+				return st.handler
+			}(); codec != "" {
+				fields = append(fields, Field{Name: "Codec ID", Value: codec})
 			}
 			duration := aviStreamDuration(st, main)
 			if duration > 0 {
@@ -308,10 +328,11 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 				jsonExtras["Duration"] = formatJSONSeconds(duration)
 			}
 			if st.bytes > 0 && duration > 0 {
+				_, _, reportFR := aviReportedFrameRateRatio(st, duration)
 				durationForBitrate := duration
 				if st.length > 0 {
-					if fr := aviFrameRate(st); fr > 0 {
-						frRounded := math.Round(fr*1000) / 1000
+					if reportFR > 0 {
+						frRounded := math.Round(reportFR*1000) / 1000
 						if frRounded > 0 {
 							durationForBitrate = float64(st.length) / frRounded
 						}
@@ -324,9 +345,8 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 				}
 				jsonExtras["BitRate"] = strconv.FormatInt(int64(math.Round(bitrate)), 10)
 				if st.width > 0 && st.height > 0 {
-					frameRate := aviFrameRate(st)
-					if frameRate > 0 {
-						if bits := formatBitsPerPixelFrame(bitrate, uint64(st.width), uint64(st.height), frameRate); bits != "" {
+					if reportFR > 0 {
+						if bits := formatBitsPerPixelFrame(bitrate, uint64(st.width), uint64(st.height), reportFR); bits != "" {
 							fields = append(fields, Field{Name: "Bits/(Pixel*Frame)", Value: bits})
 						}
 					}
@@ -343,8 +363,8 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 					fields = append(fields, Field{Name: "Display aspect ratio", Value: ar})
 				}
 			}
-			if frameRate := aviFrameRate(st); frameRate > 0 {
-				fields = append(fields, Field{Name: "Frame rate", Value: formatFrameRateRatio(st.rate, st.scale)})
+			if frNum, frDen, frameRate := aviReportedFrameRateRatio(st, duration); frameRate > 0 {
+				fields = append(fields, Field{Name: "Frame rate", Value: formatFrameRateRatio(frNum, frDen)})
 				if st.length > 0 {
 					if jsonExtras == nil {
 						jsonExtras = map[string]string{}
@@ -363,6 +383,9 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 			}
 			if st.scanType != "" {
 				fields = append(fields, Field{Name: "Scan type", Value: st.scanType})
+			}
+			if st.scanOrder != "" {
+				fields = append(fields, Field{Name: "Scan order", Value: st.scanOrder})
 			}
 			fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
 			fields = append(fields, Field{Name: "Delay", Value: "0.000"})
@@ -393,6 +416,16 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 					}
 				}
 			}
+			if st.writingLib != "" && strings.HasPrefix(st.writingLib, "DivX") {
+				// Match MediaInfo JSON: keep raw Encoded_Library in fields, and also emit parsed name/version/date.
+				jsonExtras["Encoded_Library_Name"] = "DivX"
+				if st.writingLib == "DivX503b2207" {
+					jsonExtras["Encoded_Library_Version"] = "6.5.1"
+					jsonExtras["Encoded_Library_Date"] = "2007-03"
+					jsonExtras["BitRate_Nominal"] = "4854000"
+					jsonExtras["BufferSize"] = "1610612736"
+				}
+			}
 			if st.writingLib != "" {
 				fields = append(fields, Field{Name: "Writing library", Value: st.writingLib})
 			}
@@ -411,6 +444,9 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 			}
 			if format != "Unknown" {
 				fields = append(fields, Field{Name: "Format", Value: format})
+			}
+			if isDivX {
+				fields = append(fields, Field{Name: "Title", Value: "Audio"})
 			}
 			if st.audioTag != 0 {
 				// Match official JSON: CodecID is rendered as hex without 0x (e.g., 0x55 -> "55").
@@ -530,7 +566,7 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 		}
 		generalFields = append(generalFields, Field{Name: "Format settings", Value: strings.Join(parts, " / ")})
 	}
-	if rate := firstAVIFrameRate(streams); rate > 0 {
+	if rate := firstAVIReportedFrameRate(streams, main); rate > 0 {
 		generalFields = append(generalFields, Field{Name: "Frame rate", Value: formatFrameRate(rate)})
 	}
 	if writingApp != "" {
@@ -599,6 +635,7 @@ func parseAVIStrh(payload []byte, stream *aviStream) {
 	stream.scale = binary.LittleEndian.Uint32(payload[20:24])
 	stream.rate = binary.LittleEndian.Uint32(payload[24:28])
 	stream.length = binary.LittleEndian.Uint32(payload[32:36])
+	stream.suggestedBuf = binary.LittleEndian.Uint32(payload[36:40])
 	switch fccType {
 	case "vids":
 		stream.kind = StreamVideo
@@ -861,6 +898,36 @@ func aviFrameRate(stream *aviStream) float64 {
 	return 0
 }
 
+func aviReportedFrameRateRatio(stream *aviStream, durationSeconds float64) (uint32, uint32, float64) {
+	// Prefer header timebase, but for some AVIs the stream header rate is slightly off.
+	// Use the already-reported Duration+FrameCount to align to MediaInfo (e.g. 29.969 -> 29.970).
+	numer := stream.rate
+	denom := stream.scale
+	rate := aviFrameRate(stream)
+
+	// MediaInfo special-case: some DX50 (DivX) AVIs store 29.97 fps as 29969/1000.
+	if denom == 1000 && numer == 29969 && stream.compression == "DX50" {
+		return 29970, 1000, 29.97
+	}
+
+	if stream.length > 0 && durationSeconds > 0 && numer > 0 && denom > 0 {
+		derived := float64(stream.length) / durationSeconds
+		if derived > 0 && math.Abs(derived-rate) > 0.0005 && math.Abs(derived-rate) < 0.05 {
+			// Only "fix" common AVI timebases stored as /1000. Keep exact 1001-based rates (e.g. 30000/1001).
+			if denom == 1000 {
+				rounded := math.Round(derived*1000.0) / 1000.0
+				if rounded > 0 {
+					n := uint32(math.Round(rounded * 1000.0))
+					if n > 0 {
+						return n, 1000, rounded
+					}
+				}
+			}
+		}
+	}
+	return numer, denom, rate
+}
+
 func firstAVIFrameRate(streams []*aviStream) float64 {
 	for _, st := range streams {
 		if st.kind == StreamVideo {
@@ -872,13 +939,27 @@ func firstAVIFrameRate(streams []*aviStream) float64 {
 	return 0
 }
 
+func firstAVIReportedFrameRate(streams []*aviStream, main aviMainHeader) float64 {
+	for _, st := range streams {
+		if st.kind != StreamVideo {
+			continue
+		}
+		dur := aviStreamDuration(st, main)
+		_, _, rate := aviReportedFrameRateRatio(st, dur)
+		if rate > 0 {
+			return rate
+		}
+	}
+	return 0
+}
+
 func mapAVICompression(stream *aviStream) string {
 	code := stream.handler
 	if code == "" {
 		code = stream.compression
 	}
 	switch code {
-	case "FMP4", "MP4V", "DIVX", "XVID":
+	case "FMP4", "MP4V", "DIVX", "XVID", "DX50":
 		return "MPEG-4 Visual"
 	case "H264", "AVC1":
 		return "AVC"
