@@ -446,15 +446,23 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 				}
 			}
 			duration := aviAudioDurationSeconds(st)
-			if st.audioTag == 0x55 && st.packetCount > 0 && st.audioRate > 0 {
-				// MediaInfo: MP3-in-AVI SamplingCount is based on packet count (1 packet ~= 1 frame).
+			// Some AVIs may be missing a usable byte count (no index + low ParseSpeed).
+			// In that case, fall back to packet count for MP3 duration estimation.
+			if duration == 0 && st.audioTag == 0x55 && st.packetCount > 0 && st.audioRate > 0 {
 				samples := int64(st.packetCount) * 1152
-				jsonExtras["SamplingCount"] = strconv.FormatInt(samples, 10)
 				duration = float64(samples) / float64(st.audioRate)
 			}
 			if duration > 0 {
 				fields = addStreamDuration(fields, duration)
 				jsonExtras["Duration"] = formatJSONSeconds(duration)
+				if st.audioRate > 0 {
+					// Match official precision: SamplingCount aligns to the 3-decimal Duration in JSON.
+					rounded := math.Round(duration*1000.0) / 1000.0
+					samples := int64(math.Round(rounded * float64(st.audioRate)))
+					if samples > 0 {
+						jsonExtras["SamplingCount"] = strconv.FormatInt(samples, 10)
+					}
+				}
 			}
 
 			if st.audioTag == 0x55 && st.packetCount > 0 {
@@ -487,7 +495,11 @@ func ParseAVIWithOptions(file io.ReadSeeker, size int64, opts AnalyzeOptions) (C
 				}
 			}
 
-			jsonExtras["Alignment"] = "Aligned"
+			if st.audioAlign == 1 {
+				jsonExtras["Alignment"] = "Split"
+			} else {
+				jsonExtras["Alignment"] = "Aligned"
+			}
 			jsonExtras["Delay"] = "0.000"
 			jsonExtras["Delay_Source"] = "Stream"
 			jsonExtras["Video_Delay"] = "0.000"
