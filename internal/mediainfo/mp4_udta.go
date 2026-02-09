@@ -23,6 +23,27 @@ func parseMP4WritingApp(udta []byte) string {
 	return string(data[8:])
 }
 
+func parseMP4Description(udta []byte) string {
+	meta, ok := findMP4Box(udta, "meta")
+	if !ok || len(meta) <= 4 {
+		return ""
+	}
+	meta = meta[4:]
+	ilst, ok := findMP4Box(meta, "ilst")
+	if !ok {
+		return ""
+	}
+	desc, ok := findMP4Box(ilst, "desc")
+	if !ok {
+		return ""
+	}
+	data, ok := findMP4Box(desc, "data")
+	if !ok || len(data) <= 8 {
+		return ""
+	}
+	return string(data[8:])
+}
+
 func findMP4Box(buf []byte, boxType string) ([]byte, bool) {
 	pos := 0
 	for pos+8 <= len(buf) {

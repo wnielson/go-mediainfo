@@ -248,6 +248,8 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			}
 		case "Writing application":
 			out = append(out, jsonKV{Key: "Encoded_Application", Val: field.Value})
+		case "Description":
+			out = append(out, jsonKV{Key: "Description", Val: field.Value})
 		case "Encoded date":
 			out = append(out, jsonKV{Key: "Encoded_Date", Val: field.Value})
 		case "Tagged date":

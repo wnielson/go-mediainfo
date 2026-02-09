@@ -139,6 +139,9 @@ func parseMoov(buf []byte) (MP4Info, bool) {
 			if app := parseMP4WritingApp(payload); app != "" {
 				info.General = append(info.General, Field{Name: "Writing application", Value: app})
 			}
+			if desc := parseMP4Description(payload); desc != "" {
+				info.General = append(info.General, Field{Name: "Description", Value: desc})
+			}
 			if chapters := parseMP4Chpl(payload); len(chapters) > 0 {
 				info.Chapters = append(info.Chapters, chapters...)
 			}
