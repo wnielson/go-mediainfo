@@ -1533,9 +1533,9 @@ func consumeAC3(entry *tsStream, payload []byte) {
 		}
 		entry.audioFrames++
 		entry.hasAC3 = true
-		// MediaInfo collects AC-3 metadata stats across a meaningful portion of the stream.
-		// Keep a cap to avoid worst-case work on very long files.
-		const maxStatsBytes = 2 * 1024 * 1024
+		// MediaInfo collects AC-3 metadata stats from a bounded sample (default ParseSpeed=0.5).
+		// Keep the cap low to match official compr/dynrng counts and avoid full-file scanning cost.
+		const maxStatsBytes = 256 * 1024
 		if entry.ac3StatsBytes < maxStatsBytes {
 			entry.ac3Info.mergeFrame(info)
 			entry.ac3StatsBytes += uint64(frameSize)

@@ -70,6 +70,10 @@ func consumeMPEG2TSVideo(entry *tsStream, payload []byte, pts uint64, hasPTS boo
 func consumeMPEG2CaptionsTS(entry *tsStream, payload []byte, pts uint64, hasPTS bool) {
 	entry.videoCCCarry = append(entry.videoCCCarry, payload...)
 	buf := entry.videoCCCarry
+	carryStart := 0
+	if len(buf) >= 3 {
+		carryStart = len(buf) - 3
+	}
 	scanMPEG2StartCodes(buf, 0, func(i int, code byte) bool {
 		switch code {
 		case 0x00:
@@ -77,17 +81,15 @@ func consumeMPEG2CaptionsTS(entry *tsStream, payload []byte, pts uint64, hasPTS 
 		case 0xB2:
 			end := nextStartCode(buf, i+4)
 			if end < 0 {
-				end = len(buf)
+				// User data may span PES packets; keep it for the next call.
+				carryStart = i
+				return false
 			}
 			parseMPEG2UserDataTS(entry, buf[i+4:end], pts, hasPTS, entry.videoFrameCount)
 		}
 		return true
 	})
-	if len(buf) >= 3 {
-		entry.videoCCCarry = append(entry.videoCCCarry[:0], buf[len(buf)-3:]...)
-	} else {
-		entry.videoCCCarry = append(entry.videoCCCarry[:0], buf...)
-	}
+	entry.videoCCCarry = append(entry.videoCCCarry[:0], buf[carryStart:]...)
 }
 
 func parseMPEG2UserDataTS(entry *tsStream, data []byte, pts uint64, hasPTS bool, framesBefore int) {
@@ -95,6 +97,7 @@ func parseMPEG2UserDataTS(entry *tsStream, data []byte, pts uint64, hasPTS bool,
 		return
 	}
 	// GA94 / A/53 user data: CEA-708 + CEA-608-in-708.
+	foundGA94 := false
 	for i := 0; i+5 < len(data); i++ {
 		if data[i] != 'G' || data[i+1] != 'A' || data[i+2] != '9' || data[i+3] != '4' {
 			continue
@@ -102,6 +105,7 @@ func parseMPEG2UserDataTS(entry *tsStream, data []byte, pts uint64, hasPTS bool,
 		if data[i+4] != 0x03 {
 			continue
 		}
+		foundGA94 = true
 		flags := data[i+5]
 		count := int(flags & 0x1F)
 		idx := i + 6
@@ -128,6 +132,9 @@ func parseMPEG2UserDataTS(entry *tsStream, data []byte, pts uint64, hasPTS bool,
 			}
 			idx += 3
 		}
+		// Some broadcasts include multiple GA94 blocks; keep scanning to match MediaInfo.
+	}
+	if foundGA94 {
 		return
 	}
 	// DVD-style user data fallback (no DTVCC).
@@ -180,7 +187,7 @@ func updateCCTrackTS(entry *tsStream, ccType int, ccData1 byte, ccData2 byte, pt
 		if rating != "" {
 			entry.xdsLawRating = rating
 		}
-		_ = title // keep decode side-effects local; Title is not reliable in TS without full EPG parity.
+		_ = title // Program Name is noisy in TS; keep for future parity work.
 	}
 }
 

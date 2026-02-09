@@ -21,6 +21,17 @@ func (x *eia608XDS) init() {
 func (x *eia608XDS) feed(cc1, cc2 byte) (title string, lawRating string, ok bool) {
 	x.init()
 
+	// MediaInfoLib strips the odd parity bit before XDS parsing.
+	cc1 &= 0x7F
+	cc2 &= 0x7F
+
+	// Mirror MediaInfoLib call-site gating (File_Eia608.cpp):
+	// - Start/continue markers always advance XDS state.
+	// - Payload bytes are only XDS when a packet is already active.
+	if !((cc1 != 0 && cc1 < 0x10) || (x.level != -1 && cc1 >= 0x20)) {
+		return "", "", false
+	}
+
 	// XDS protocol:
 	// - Start: cc1 in 0x01..0x0E (odd) identifies packet class/type.
 	// - Continue: cc1 in 0x02..0x0F (even) selects which packet continues; payload is not part of data.
@@ -41,7 +52,6 @@ func (x *eia608XDS) feed(cc1, cc2 byte) (title string, lawRating string, ok bool
 			return "", "", false
 		}
 		x.level = idx
-		return "", "", false
 	}
 	if cc1 != 0 && cc1 < 0x0F {
 		// Start: locate or create new entry.
@@ -60,14 +70,6 @@ func (x *eia608XDS) feed(cc1, cc2 byte) (title string, lawRating string, ok bool
 			x.data[idx] = x.data[idx][:0]
 		}
 		x.level = idx
-	}
-
-	// MediaInfoLib only treats basic characters (cc1>=0x20) as XDS payload when a packet is active.
-	// Control codes (0x10..0x1F) interleave on the same channel and must not corrupt XDS payload.
-	if x.level >= 0 {
-		if !((cc1 != 0 && cc1 < 0x10) || cc1 >= 0x20) {
-			return "", "", false
-		}
 	}
 
 	if x.level < 0 || x.level >= len(x.data) {
