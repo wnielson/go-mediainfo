@@ -182,6 +182,20 @@ func isCCCommand(ccData1 byte, ccData2 byte) bool {
 		ccData2 >= 0x20 && ccData2 <= 0x2F
 }
 
+func isCCStartCommand(ccData1 byte, ccData2 byte) bool {
+	// Match MediaInfoLib File_Eia608.cpp: Duration_Start_Command is set on specific commands,
+	// not on all 0x20..0x2F control codes (notably excluding EOC 0x2F).
+	if !isCCCommand(ccData1, ccData2) {
+		return false
+	}
+	switch ccData2 {
+	case 0x20, 0x25, 0x26, 0x27, 0x29, 0x2A, 0x2B, 0x2C:
+		return true
+	default:
+		return false
+	}
+}
+
 func resolveCCResult(hasCC bool, seenType0 bool, seenType1 bool, hasCommand bool, hasDisplay bool) (bool, int, bool, bool) {
 	if !hasCC {
 		return false, 0, false, false

@@ -607,6 +607,16 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			for _, field := range generalFields {
 				general.Fields = appendFieldUnique(general.Fields, field)
 			}
+			// MediaInfoLib surfaces XDS Program Name as both Title and Movie in JSON for TS.
+			if title := findField(general.Fields, "Title"); title != "" {
+				general.JSON["Title"] = title
+			}
+			if movie := findField(general.Fields, "Movie"); movie != "" {
+				general.JSON["Movie"] = movie
+				if general.JSON["Title"] == "" {
+					general.JSON["Title"] = movie
+				}
+			}
 			streams = parsedStreams
 			if id := findField(general.Fields, "ID"); id != "" {
 				if value := extractLeadingNumber(id); value != "" {

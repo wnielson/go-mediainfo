@@ -37,56 +37,71 @@ func (x *eia608XDS) feed(cc1, cc2 byte) (title string, lawRating string, ok bool
 	// - Continue: cc1 in 0x02..0x0F (even) selects which packet continues; payload is not part of data.
 	// - Data: other byte pairs are appended to the active packet.
 	// - End: cc1 == 0x0F finalizes.
-	if cc1 != 0 && cc1 < 0x10 && cc1%2 == 0 {
-		// Continue: decrement cc1 and find existing entry by first 2 bytes.
-		cc1--
-		idx := -1
-		for i := range x.data {
-			if len(x.data[i]) >= 2 && x.data[i][0] == cc1 && x.data[i][1] == cc2 {
-				idx = i
-				break
+	if cc1 != 0 && cc1 < 0x10 {
+		if cc1%2 == 0 {
+			// Continue: decrement cc1 and find existing entry by first 2 bytes.
+			cc1--
+			idx := -1
+			for i := range x.data {
+				if len(x.data[i]) >= 2 && x.data[i][0] == cc1 && x.data[i][1] == cc2 {
+					idx = i
+					break
+				}
 			}
-		}
-		if idx < 0 {
-			x.level = -1
+			if idx < 0 {
+				x.level = -1
+				return "", "", false
+			}
+			x.level = idx
 			return "", "", false
 		}
-		x.level = idx
-	}
-	if cc1 != 0 && cc1 < 0x0F {
-		// Start: locate or create new entry.
-		idx := -1
-		for i := range x.data {
-			if len(x.data[i]) >= 2 && x.data[i][0] == cc1 && x.data[i][1] == cc2 {
-				idx = i
-				break
+		// End marker.
+		if cc1 == 0x0F {
+			if x.level < 0 || x.level >= len(x.data) {
+				return "", "", false
 			}
+			x.data[x.level] = append(x.data[x.level], cc1, cc2)
+			if len(x.data[x.level]) >= 36 {
+				x.data[x.level] = x.data[x.level][:0]
+				x.level = -1
+				return "", "", false
+			}
+			return x.decodeAndClear()
 		}
-		if idx < 0 {
-			x.data = append(x.data, nil)
-			idx = len(x.data) - 1
-		} else {
-			// Restart existing entry.
-			x.data[idx] = x.data[idx][:0]
+		// Start: locate or create new entry; marker bytes are the class/type prefix.
+		if cc1 < 0x0F {
+			idx := -1
+			for i := range x.data {
+				if len(x.data[i]) >= 2 && x.data[i][0] == cc1 && x.data[i][1] == cc2 {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				x.data = append(x.data, nil)
+				idx = len(x.data) - 1
+			} else {
+				// Restart existing entry.
+				x.data[idx] = x.data[idx][:0]
+			}
+			x.level = idx
+			x.data[x.level] = append(x.data[x.level], cc1, cc2)
+			return "", "", false
 		}
-		x.level = idx
+		return "", "", false
 	}
 
 	if x.level < 0 || x.level >= len(x.data) {
 		return "", "", false
 	}
 
+	// Payload bytes.
 	x.data[x.level] = append(x.data[x.level], cc1, cc2)
 	if len(x.data[x.level]) >= 36 {
 		// Security bound: drop oversized packets.
 		x.data[x.level] = x.data[x.level][:0]
 		x.level = -1
 		return "", "", false
-	}
-
-	// End marker.
-	if cc1 == 0x0F {
-		return x.decodeAndClear()
 	}
 	return "", "", false
 }

@@ -60,10 +60,20 @@ type tsStream struct {
 	videoStarted        bool
 	writingLibrary      string
 	encoding            string
-	// XDS state is not per-field; MediaInfoLib tracks a single XDS packet state machine
-	// (it may see packet bytes on either field in GA94/A53 user data).
-	xds          eia608XDS
-	xdsLawRating string
+	// MPEG-2 GA94 caption user data is reordered by temporal_reference in MediaInfoLib before
+	// feeding the DTVCC/XDS parsers. We keep a small per-GOP buffer for XDS only.
+	mpeg2CurTemporalReference uint16
+	mpeg2XDSReorder           []mpeg2UserDataPacket
+	// XDS parsing is per cc_type (field). MediaInfoLib uses one File_Eia608 parser per cc_type.
+	xds            [2]eia608XDS
+	xdsLawRating   string
+	xdsLastTitle   string
+	xdsTitleCounts map[string]int
+}
+
+type mpeg2UserDataPacket struct {
+	temporalReference uint16
+	data              []byte
 }
 
 func ParseMPEGTS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field, bool) {
@@ -462,6 +472,39 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				}
 			}
 
+			// Some real-world TS captures start with PES payload before PAT/PMT is available.
+			// For parity with MediaInfo, infer MPEG-2 video streams from early start codes so we
+			// can parse matrices/GOP/intra_dc_precision even when PMT arrives later.
+			if packetSize == 188 && pesStart {
+				if _, ok := streams[pid]; !ok {
+					headerLen := int(payload[8])
+					dataStart := min(9+headerLen, len(payload))
+					data := payload[dataStart:]
+					peek := data
+					if len(peek) > 512 {
+						peek = peek[:512]
+					}
+					if bytes.Contains(peek, []byte{0x00, 0x00, 0x01, 0xB3}) {
+						entry := tsStream{
+							pid:           pid,
+							programNumber: primaryProgramNumber,
+							kind:          StreamVideo,
+							format:        "MPEG Video",
+						}
+						if pending, ok := pendingPTS[pid]; ok {
+							entry.pts = *pending
+							videoPTS.add(pending.min)
+							videoPTS.add(pending.max)
+							delete(pendingPTS, pid)
+						}
+						streams[pid] = &entry
+						streamOrder = append(streamOrder, pid)
+						videoPIDs[pid] = struct{}{}
+						hasMPEGVideo = true
+					}
+				}
+			}
+
 			entry, ok := streams[pid]
 			if !ok {
 				continue
@@ -538,7 +581,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			}
 
 			if entry.kind == StreamVideo && !entry.videoStarted {
-				// Ignore pre-start payload for video PIDs (file starts mid-PES).
+				// File may start mid-PES. Don't count bytes until we see a PES start, but still
+				// let the MPEG-2 parser inspect early bytes for matrices/GOP/intra_dc_precision.
+				if entry.format == "MPEG Video" && len(payload) > 0 {
+					consumeMPEG2TSVideo(entry, payload, entry.lastPTS, entry.hasLastPTS)
+				}
 				continue
 			}
 
@@ -582,7 +629,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			processPES(entry)
 		}
 		if entry.kind == StreamVideo && entry.format == "MPEG Video" && entry.mpeg2Parser != nil && entry.mpeg2Parser.sawSequence {
-			info := entry.mpeg2Parser.finalize()
+			info := entry.mpeg2Parser.finalizeTS()
 			entry.mpeg2Info = info
 			entry.hasMPEG2Info = true
 			if info.Width > 0 {
@@ -699,11 +746,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			if info.Matrix != "" {
 				fields = append(fields, Field{Name: "Format settings, Matrix", Value: info.Matrix})
 			}
-			if info.IntraDCPrecision > 0 {
-				if jsonRaw == nil {
-					jsonRaw = map[string]string{}
-				}
-				jsonRaw["extra"] = renderJSONObject([]jsonKV{{Key: "intra_dc_precision", Val: strconv.Itoa(info.IntraDCPrecision)}}, false)
+			if info.Matrix == "Custom" && info.MatrixData != "" {
+				jsonExtras["Format_Settings_Matrix_Data"] = info.MatrixData
 			}
 			if info.GOPVariable {
 				fields = append(fields, Field{Name: "Format settings, GOP", Value: "Variable"})
@@ -774,6 +818,18 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			}
 			if !isBDAV && hasMPEGVideo && st.format == "MPEG Video" && st.hasMPEG2Info && duration > 0 {
 				info := st.mpeg2Info
+				if info.IntraDCPrecision > 0 {
+					intra := info.IntraDCPrecision
+					// Heuristic to match MediaInfoLib ParseSpeed sampling: for short TS (<= ~30s),
+					// intra_dc_precision tends to reflect the initial scan window.
+					if duration <= 30.0 && info.IntraDCPrecisionFirst > 0 {
+						intra = info.IntraDCPrecisionFirst
+					}
+					if jsonRaw == nil {
+						jsonRaw = map[string]string{}
+					}
+					jsonRaw["extra"] = renderJSONObject([]jsonKV{{Key: "intra_dc_precision", Val: strconv.Itoa(intra)}}, false)
+				}
 				fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
 				bitrate := (float64(st.bytes) * 8) / duration
 				fields = addStreamBitrate(fields, bitrate)
@@ -1172,6 +1228,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			}
 			if st.xdsLawRating != "" {
 				generalFields = append(generalFields, Field{Name: "Law rating", Value: st.xdsLawRating})
+			}
+			// MediaInfoLib sets Title/Movie to the last Program Name observed.
+			if title := st.xdsLastTitle; title != "" {
+				generalFields = append(generalFields, Field{Name: "Title", Value: title})
+				generalFields = append(generalFields, Field{Name: "Movie", Value: title})
 			}
 			break
 		}

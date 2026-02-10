@@ -2,6 +2,7 @@ package mediainfo
 
 import (
 	"math"
+	"sort"
 )
 
 type dtvccState struct {
@@ -61,7 +62,7 @@ func consumeMPEG2TSVideo(entry *tsStream, payload []byte, pts uint64, hasPTS boo
 		return
 	}
 	if entry.mpeg2Parser == nil {
-		entry.mpeg2Parser = &mpeg2VideoParser{}
+		entry.mpeg2Parser = &mpeg2VideoParser{intraFreezeAfterI: 8}
 	}
 	entry.mpeg2Parser.consume(payload)
 	consumeMPEG2CaptionsTS(entry, payload, pts, hasPTS)
@@ -77,7 +78,16 @@ func consumeMPEG2CaptionsTS(entry *tsStream, payload []byte, pts uint64, hasPTS 
 	scanMPEG2StartCodes(buf, 0, func(i int, code byte) bool {
 		switch code {
 		case 0x00:
+			// picture_start_code: parse temporal_reference (10 bits) for XDS reorder.
+			if i+6 <= len(buf) {
+				b0 := buf[i+4]
+				b1 := buf[i+5]
+				entry.mpeg2CurTemporalReference = uint16(b0)<<2 | uint16(b1>>6)
+			}
 			entry.videoFrameCount++
+		case 0xB8:
+			// group_start_code: flush any buffered XDS packets (temporal_reference resets per GOP).
+			flushMPEG2XDSReorder(entry)
 		case 0xB2:
 			end := nextStartCode(buf, i+4)
 			if end < 0 {
@@ -85,11 +95,86 @@ func consumeMPEG2CaptionsTS(entry *tsStream, payload []byte, pts uint64, hasPTS 
 				carryStart = i
 				return false
 			}
-			parseMPEG2UserDataTS(entry, buf[i+4:end], pts, hasPTS, entry.videoFrameCount)
+			userData := buf[i+4 : end]
+			// Capture GA94 payload for XDS only; parse it later in temporal_reference order.
+			// Keep the immediate parse for captions/commands unchanged.
+			entry.mpeg2XDSReorder = append(entry.mpeg2XDSReorder, mpeg2UserDataPacket{
+				temporalReference: entry.mpeg2CurTemporalReference,
+				data:              append([]byte(nil), userData...),
+			})
+			parseMPEG2UserDataTS(entry, userData, pts, hasPTS, entry.videoFrameCount)
 		}
 		return true
 	})
 	entry.videoCCCarry = append(entry.videoCCCarry[:0], buf[carryStart:]...)
+
+	// Safety bound: flush opportunistically to keep memory bounded even if GOP headers are missing.
+	if len(entry.mpeg2XDSReorder) > 64 {
+		flushMPEG2XDSReorder(entry)
+	}
+}
+
+func flushMPEG2XDSReorder(entry *tsStream) {
+	if entry == nil || len(entry.mpeg2XDSReorder) == 0 {
+		return
+	}
+	pkts := entry.mpeg2XDSReorder
+	entry.mpeg2XDSReorder = entry.mpeg2XDSReorder[:0]
+	sort.Slice(pkts, func(i, j int) bool {
+		return pkts[i].temporalReference < pkts[j].temporalReference
+	})
+	for i := range pkts {
+		parseMPEG2UserDataTSXDS(entry, pkts[i].data)
+	}
+}
+
+func parseMPEG2UserDataTSXDS(entry *tsStream, data []byte) {
+	if entry == nil || len(data) < 6 {
+		return
+	}
+	for i := 0; i+5 < len(data); i++ {
+		if data[i] != 'G' || data[i+1] != 'A' || data[i+2] != '9' || data[i+3] != '4' {
+			continue
+		}
+		if data[i+4] != 0x03 {
+			continue
+		}
+		flags := data[i+5]
+		count := int(flags & 0x1F)
+		idx := i + 6
+		if idx >= len(data) {
+			continue
+		}
+		// reserved / em_data
+		idx++
+		for j := 0; j < count && idx+2 < len(data); j++ {
+			ccValid := (data[idx] & 0x04) != 0
+			ccTypeVal := int(data[idx] & 0x03)
+			ccData1 := data[idx+1]
+			ccData2 := data[idx+2]
+			if ccValid && (ccTypeVal == 0 || ccTypeVal == 1) && ccTypeVal < len(entry.xds) {
+				// MediaInfoLib strips the parity bit before EIA-608 parsing.
+				ccData1 &= 0x7F
+				ccData2 &= 0x7F
+				if title, rating, ok := entry.xds[ccTypeVal].feed(ccData1, ccData2); ok {
+					if rating != "" {
+						entry.xdsLawRating = rating
+					}
+					if title != "" {
+						title = normalizeXDSTitle(title)
+						if title != "" {
+							entry.xdsLastTitle = title
+							if entry.xdsTitleCounts == nil {
+								entry.xdsTitleCounts = map[string]int{}
+							}
+							entry.xdsTitleCounts[title]++
+						}
+					}
+				}
+			}
+			idx += 3
+		}
+	}
 }
 
 func parseMPEG2UserDataTS(entry *tsStream, data []byte, pts uint64, hasPTS bool, framesBefore int) {
@@ -159,7 +244,7 @@ func updateCCTrackTS(entry *tsStream, ccType int, ccData1 byte, ccData2 byte, pt
 	track.lastFrame = framesBefore
 	if hasPTS {
 		track.lastPTS = pts
-		if track.firstCommandPTS == 0 && isCCCommand(ccData1, ccData2) {
+		if track.firstCommandPTS == 0 && isCCStartCommand(ccData1, ccData2) {
 			track.firstCommandPTS = pts
 			if framesBefore > 0 {
 				// Official mediainfo reports Duration_Start_Command aligned to a 0-based frame index:
@@ -181,14 +266,9 @@ func updateCCTrackTS(entry *tsStream, ccType int, ccData1 byte, ccData2 byte, pt
 		}
 	}
 
-	// EIA-608 XDS is carried on the 608 channel bytes; parse it for General metadata parity.
-	// MediaInfoLib tracks XDS state across both fields (single XDS_Level), so do the same here.
-	if title, rating, ok := entry.xds.feed(ccData1, ccData2); ok {
-		if rating != "" {
-			entry.xdsLawRating = rating
-		}
-		_ = title // Program Name is noisy in TS; keep for future parity work.
-	}
+	// EIA-608 XDS is carried in GA94 user data; MediaInfoLib updates General fields with the
+	// most recently completed Program Name packet. XDS parsing is done via temporal_reference
+	// reorder in flushMPEG2XDSReorder to match MediaInfoLib.
 }
 
 func mpeg2CommercialNameTS(info mpeg2VideoInfo) string {

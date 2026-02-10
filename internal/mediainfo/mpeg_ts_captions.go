@@ -21,10 +21,10 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 		info := video.mpeg2Info
 		if info.FrameRateNumer > 0 && info.FrameRateDenom > 0 {
 			duration = float64(video.videoFrameCount) * float64(info.FrameRateDenom) / float64(info.FrameRateNumer)
-			duration = math.Floor(duration*1000+1e-9) / 1000
+			duration = math.Round(duration*1000) / 1000
 		} else if info.FrameRate > 0 {
 			duration = float64(video.videoFrameCount) / info.FrameRate
-			duration = math.Floor(duration*1000+1e-9) / 1000
+			duration = math.Round(duration*1000) / 1000
 		}
 	}
 	if duration <= 0 {
@@ -44,20 +44,39 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 	}
 	menuID := video.programNumber
 	videoPID := video.pid
+	// MediaInfoLib suppresses Text_Lines_Count when it has jumped/unsynched during parsing.
+	// With the default CLI ParseSpeed (0.5), this tends to happen on longer TS where scanning
+	// is bounded (e.g. ~30s). Heuristic: only emit Lines_Count for short streams.
+	emitLinesCount := duration > 0 && duration <= 30.0
 
 	if video.ccOdd.found {
 		startCommand := 0.0
-		if fps > 0 && video.ccOdd.firstCommandFrame > 0 {
+		if fps > 0 && video.ccOdd.firstCommandPTS != 0 {
+			// MediaInfoLib tracks command time from FrameInfo.DTS; align to the nearest frame time.
+			ptsSec := float64(video.ccOdd.firstCommandPTS) / 90000.0
+			frame := int64(math.Round((ptsSec-delay)*fps)) - 1
+			if frame < 0 {
+				frame = 0
+			}
+			startCommand = delay + float64(frame)/fps
+		} else if fps > 0 && video.ccOdd.firstCommandFrame > 0 {
 			startCommand = delay + float64(video.ccOdd.firstCommandFrame)/fps
 		}
-		*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-608", "CC1", startCommand))
+		*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-608", "CC1", startCommand, emitLinesCount))
 	}
 	if video.ccEven.found {
 		startCommand := 0.0
-		if fps > 0 && video.ccEven.firstCommandFrame > 0 {
+		if fps > 0 && video.ccEven.firstCommandPTS != 0 {
+			ptsSec := float64(video.ccEven.firstCommandPTS) / 90000.0
+			frame := int64(math.Round((ptsSec-delay)*fps)) - 1
+			if frame < 0 {
+				frame = 0
+			}
+			startCommand = delay + float64(frame)/fps
+		} else if fps > 0 && video.ccEven.firstCommandFrame > 0 {
 			startCommand = delay + float64(video.ccEven.firstCommandFrame)/fps
 		}
-		*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-608", "CC3", startCommand))
+		*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-608", "CC3", startCommand, emitLinesCount))
 	}
 	if len(video.dtvccServices) > 0 {
 		services := make([]int, 0, len(video.dtvccServices))
@@ -69,12 +88,12 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 			if svc <= 0 {
 				continue
 			}
-			*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-708", strconv.Itoa(svc), 0))
+			*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-708", strconv.Itoa(svc), 0, emitLinesCount))
 		}
 	}
 }
 
-func buildTSCaptionStream(videoPID uint16, programNumber uint16, delaySeconds float64, duration float64, format string, service string, startCommandSeconds float64) Stream {
+func buildTSCaptionStream(videoPID uint16, programNumber uint16, delaySeconds float64, duration float64, format string, service string, startCommandSeconds float64, emitLinesCount bool) Stream {
 	idLabel := fmt.Sprintf("%s-%s", formatID(uint64(videoPID)), service)
 	jsonID := fmt.Sprintf("%d-%s", videoPID, service)
 	fields := []Field{
@@ -100,6 +119,9 @@ func buildTSCaptionStream(videoPID uint16, programNumber uint16, delaySeconds fl
 		"Duration":    formatJSONSeconds(duration),
 		"StreamSize":  "0",
 		"Video_Delay": "0.000",
+	}
+	if emitLinesCount && format == "EIA-608" {
+		jsonExtras["Lines_Count"] = "0"
 	}
 	if programNumber > 0 {
 		jsonExtras["MenuID"] = strconv.FormatUint(uint64(programNumber), 10)

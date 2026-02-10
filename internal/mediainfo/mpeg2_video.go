@@ -101,11 +101,21 @@ type mpeg2VideoInfo struct {
 	MatrixData               string
 	BufferSize               int64
 	IntraDCPrecision         int
+	IntraDCPrecisionFirst    int
+	IntraDCPrecisionLast     int
 }
 
 type mpeg2VideoParser struct {
 	carry             []byte
 	info              mpeg2VideoInfo
+	rescanFromZero    bool
+	expectPictureExt  bool
+	intraFrozen       bool
+	intraFreezeAfterI int
+	firstIntraDCOk    bool
+	firstIntraDC      int
+	lastIntraDCOk     bool
+	lastIntraDC       int
 	currentGOPCount   int
 	sawGOP            bool
 	gopLength         int
@@ -149,25 +159,50 @@ func (p *mpeg2VideoParser) recordGOPMCount() {
 }
 
 func (p *mpeg2VideoParser) consume(data []byte) {
+	const maxCarry = 4096
 	buf := append(append([]byte{}, p.carry...), data...)
-	for i := 0; i+4 <= len(buf); i++ {
+	// Only scan the new region plus enough overlap for start code prefixes.
+	start := 0
+	if !p.rescanFromZero && len(p.carry) > 3 {
+		start = len(p.carry) - 3
+	}
+	p.rescanFromZero = false
+	pending := -1
+	for i := start; i+4 <= len(buf); i++ {
 		if buf[i] != 0x00 || buf[i+1] != 0x00 || buf[i+2] != 0x01 {
 			continue
 		}
 		code := buf[i+3]
+		// picture coding extension is only valid immediately after picture_header().
+		// Clear the expectation when we hit anything that implies picture data.
+		if code >= 0x01 && code <= 0xAF {
+			p.expectPictureExt = false
+		}
+		// Bound parsing to this start code's payload (up to the next start code). Without this,
+		// short extension payloads can read into the next start code and corrupt bit parsing.
+		end := nextStartCode(buf, i+4)
+		if end < 0 {
+			pending = i
+			break
+		}
+		payload := buf[i+4 : end]
 		switch code {
 		case 0xB3:
-			p.parseSequenceHeader(buf[i+4:])
+			p.parseSequenceHeader(payload)
 		case 0xB5:
-			p.parseExtension(buf[i+4:])
+			p.parseExtension(payload)
 		case 0xB8:
-			p.parseGOPHeader(buf[i+4:])
+			p.parseGOPHeader(payload)
 		case 0x00:
-			p.parsePictureHeader(buf[i+4:])
+			p.expectPictureExt = true
+			p.parsePictureHeader(payload)
 		}
 	}
-	if len(buf) >= 3 {
-		p.carry = append(p.carry[:0], buf[len(buf)-3:]...)
+	if pending >= 0 {
+		p.carry = append(p.carry[:0], buf[pending:]...)
+		p.rescanFromZero = true
+	} else if len(buf) > maxCarry {
+		p.carry = append(p.carry[:0], buf[len(buf)-maxCarry:]...)
 	} else {
 		p.carry = append(p.carry[:0], buf...)
 	}
@@ -196,8 +231,8 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 		for i := 0; i < 64; i++ {
 			v := br.readBitsValue(8)
 			if v == ^uint64(0) {
-				ok = false
-				break
+				// Sequence header may span packets; don't treat missing matrix bytes as "Custom".
+				return
 			}
 			m[i] = byte(v)
 		}
@@ -209,8 +244,6 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 					p.info.MatrixData = formatMPEG2MatrixHex(m)
 				}
 			}
-		} else {
-			customMatrix = true
 		}
 	}
 	loadNonIntra := br.readBitsValue(1)
@@ -220,8 +253,8 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 		for i := 0; i < 64; i++ {
 			v := br.readBitsValue(8)
 			if v == ^uint64(0) {
-				ok = false
-				break
+				// Sequence header may span packets; don't treat missing matrix bytes as "Custom".
+				return
 			}
 			m[i] = byte(v)
 		}
@@ -233,8 +266,6 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 					p.info.MatrixData = formatMPEG2MatrixHex(m)
 				}
 			}
-		} else {
-			customMatrix = true
 		}
 	}
 
@@ -343,6 +374,11 @@ func (p *mpeg2VideoParser) parseExtension(data []byte) {
 			p.info.MatrixCoefficients = mapMPEG2MatrixCoefficients(byte(matrix))
 		}
 	case 8:
+		if !p.expectPictureExt {
+			return
+		}
+		// Only one picture coding extension applies to a given picture header.
+		p.expectPictureExt = false
 		fcode := br.readBitsValue(16)
 		if fcode == ^uint64(0) {
 			return
@@ -367,10 +403,18 @@ func (p *mpeg2VideoParser) parseExtension(data []byte) {
 			_ = br.readBitsValue(5) // sub_carrier_phase
 		}
 		if intra != ^uint64(0) {
-			if p.intraDCCounts == nil {
-				p.intraDCCounts = map[int]int{}
+			if !p.firstIntraDCOk {
+				p.firstIntraDCOk = true
+				p.firstIntraDC = int(intra)
 			}
-			p.intraDCCounts[int(intra)]++
+			if !p.intraFrozen {
+				p.lastIntraDCOk = true
+				p.lastIntraDC = int(intra)
+				if p.intraDCCounts == nil {
+					p.intraDCCounts = map[int]int{}
+				}
+				p.intraDCCounts[int(intra)]++
+			}
 		}
 		if pictureStructure != ^uint64(0) {
 			p.pictureCount++
@@ -478,6 +522,12 @@ func (p *mpeg2VideoParser) parsePictureHeader(data []byte) {
 
 	switch codingType {
 	case 1: // I
+		// MediaInfoLib can stop deep parsing after it has "enough frames" (around 8 I-frames)
+		// at default ParseSpeed, then jump around the file. Freeze intra_dc_precision updates
+		// after the threshold so we keep the last value from the initial scan window.
+		if p.intraFreezeAfterI > 0 && p.iFrameCount >= p.intraFreezeAfterI {
+			p.intraFrozen = true
+		}
 		p.iFrameCount++
 		if p.lastISeen && p.framesSinceI > 0 {
 			if p.gopNCounts == nil {
@@ -600,6 +650,30 @@ func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
 		}
 	}
 	return p.info
+}
+
+func (p *mpeg2VideoParser) finalizeTS() mpeg2VideoInfo {
+	info := p.finalize()
+	// TS parity: MediaInfo prefers "Variable" GOP when multiple lengths are observed.
+	if len(p.gopLengthCounts) > 0 {
+		mode, variable := modeValue(p.gopLengthCounts)
+		if variable {
+			info.GOPVariable = true
+			info.GOPLength = 0
+		} else {
+			info.GOPVariable = false
+			info.GOPLength = mode
+		}
+	}
+	// TS parity: MediaInfoLib keeps the last parsed intra_dc_precision (not a mode).
+	if p.lastIntraDCOk {
+		info.IntraDCPrecision = 8 + p.lastIntraDC
+		info.IntraDCPrecisionLast = info.IntraDCPrecision
+	}
+	if p.firstIntraDCOk {
+		info.IntraDCPrecisionFirst = 8 + p.firstIntraDC
+	}
+	return info
 }
 
 func mapMPEG2AspectRatio(code uint64) string {
