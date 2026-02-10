@@ -874,6 +874,13 @@ func applyMatroskaStats(info *MatroskaInfo, stats map[uint64]*matroskaTrackStats
 			if dur > 0 {
 				// Match MediaInfo: truncate (not round) to integer b/s.
 				bps := int64(math.Floor((float64(stat.dataBytes)*8)/dur + 1e-9))
+				// Official MediaInfo quantizes Matroska AAC bitrates to 8 kb/s steps when derived.
+				format := findField(info.Tracks[i].Fields, "Format")
+				codecID := findField(info.Tracks[i].Fields, "Codec ID")
+				isAAC := strings.Contains(format, "AAC") || strings.HasPrefix(codecID, "A_AAC")
+				if isAAC && bps >= 8000 {
+					bps = int64(math.Round(float64(bps)/8000) * 8000)
+				}
 				if bps > 0 {
 					if info.Tracks[i].JSON == nil {
 						info.Tracks[i].JSON = map[string]string{}
@@ -1090,6 +1097,13 @@ func applyMatroskaTagStats(info *MatroskaInfo, tagStats map[uint64]matroskaTagSt
 					if dur, err := strconv.ParseFloat(stream.JSON["Duration"], 64); err == nil && dur > 0 {
 						bps := int64(math.Floor((float64(bytes)*8)/dur + 1e-9))
 						if bps > 0 {
+							// Official MediaInfo quantizes Matroska AAC bitrates to 8 kb/s steps when derived.
+							format := findField(stream.Fields, "Format")
+							codecID := findField(stream.Fields, "Codec ID")
+							isAAC := strings.Contains(format, "AAC") || strings.HasPrefix(codecID, "A_AAC")
+							if isAAC && bps >= 8000 {
+								bps = int64(math.Round(float64(bps)/8000) * 8000)
+							}
 							stream.JSON["BitRate"] = strconv.FormatInt(bps, 10)
 							stream.Fields = setFieldValue(stream.Fields, "Bit rate", formatBitrate(float64(bps)))
 							continue
@@ -1726,22 +1740,7 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 					return
 				}
 			}
-			if frames > 1 {
-				factor := float64(frames)
-				if info.dialnormCount > 0 {
-					info.dialnormCount *= int(frames)
-					info.dialnormSum *= factor
-				}
-				if info.comprCount > 0 {
-					info.comprCount *= int(frames)
-					info.comprSum *= factor
-				}
-				if info.dynrngCount > 0 {
-					info.dynrngCount *= int(frames)
-					info.dynrngSum *= factor
-				}
-			}
-			probe.info = info
+			probe.info.mergeFrame(info)
 			probe.ok = true
 		}
 	case "E-AC-3":
@@ -1751,8 +1750,6 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 			return parseEAC3FrameWithOptions(buf, probe.parseJOC)
 		}
 		if !packetAligned {
-			var packetInfo ac3Info
-			okPacket := false
 			offset := 0
 			for framesParsed := 0; framesParsed < 8 && offset+7 <= len(payload); framesParsed++ {
 				// Parse consecutive syncframes only at the expected boundaries. Avoid resync-scanning
@@ -1788,37 +1785,18 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 						break
 					}
 				}
-				if !okPacket {
-					packetInfo = info
-					okPacket = true
-				} else {
-					packetInfo.mergeFrame(info)
-				}
-				offset += frameSize
-				if probe.targetFrames > 0 && packetInfo.comprCount >= probe.targetFrames {
-					break
-				}
-			}
-			if okPacket {
-				info := packetInfo
-				if probe.parseJOC && !ac3HasJOCInfo(info) {
-					// Keep existing JOC scan behavior (search for EMDF) using the first payload.
-					// The multi-frame loop above already advanced through packet bytes.
-					// No extra work here; parseEAC3FrameWithOptions covers EMDF when parseJOC is true.
-				}
-				// Merge packet aggregate into probe state.
-				if !probe.ok {
-					probe.info = info
-					probe.ok = true
-				} else {
-					probe.info.mergeFrame(info)
-				}
+				probe.info.mergeFrame(info)
+				probe.ok = true
 				if probe.parseJOC && ac3HasJOCInfo(probe.info) {
 					probe.parseJOC = false
 				}
-				if probe.targetFrames > 0 && probe.info.comprCount >= probe.targetFrames {
-					probe.collect = false
+				offset += frameSize
+				if probe.targetFrames > 0 && probe.info.framesMerged >= probe.targetFrames {
+					break
 				}
+			}
+			if probe.targetFrames > 0 && probe.info.framesMerged >= probe.targetFrames {
+				probe.collect = false
 			}
 			return
 		}
@@ -1859,31 +1837,12 @@ func probeMatroskaAudio(probes map[uint64]*matroskaAudioProbe, track uint64, pay
 					}
 				}
 			}
-			if frames > 1 {
-				factor := float64(frames)
-				if info.dialnormCount > 0 {
-					info.dialnormCount *= int(frames)
-					info.dialnormSum *= factor
-				}
-				if info.comprCount > 0 {
-					info.comprCount *= int(frames)
-					if info.comprIsDB {
-						info.comprSumDB *= factor
-					} else {
-						info.comprSum *= factor
-					}
-				}
-			}
-			if !probe.ok {
-				probe.info = info
-				probe.ok = true
-			} else {
-				probe.info.mergeFrame(info)
-			}
+			probe.info.mergeFrame(info)
+			probe.ok = true
 			if probe.parseJOC && ac3HasJOCInfo(probe.info) {
 				probe.parseJOC = false
 			}
-			if probe.targetFrames > 0 && probe.info.comprCount >= probe.targetFrames {
+			if probe.targetFrames > 0 && probe.info.framesMerged >= probe.targetFrames {
 				probe.collect = false
 			}
 		}

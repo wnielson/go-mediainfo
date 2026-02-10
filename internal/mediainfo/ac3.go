@@ -20,6 +20,17 @@ type ac3Info struct {
 	frameRate   float64
 	spf         int
 
+	// Frame-scoped raw codes, used for MediaInfo-style stats (histogram-based).
+	// When aggregating, these fields come from the merged frame, not the accumulator.
+	dialnormCode uint8
+	compre       bool
+	comprCode    uint8
+	dynrnge      bool
+	dynrngCode   uint8
+	dynrngParsed bool
+
+	framesMerged int
+
 	dialnorm      int
 	dialnormSum   float64
 	dialnormCount int
@@ -42,7 +53,11 @@ type ac3Info struct {
 	dynrngSum     float64
 	dynrngMin     float64
 	dynrngMax     float64
-	dynrngeSeen   bool
+	dynrngeSeen   bool // "ever seen" (MediaInfo dynrnge_Exists)
+
+	// MediaInfo-style stats histograms. Nil until first merge.
+	comprs        []uint32
+	dynrngs       []uint32
 	cmixlevDB     float64
 	hasCmixlev    bool
 	surmixlevDB   float64
@@ -211,6 +226,7 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	}
 	info.hasDialnorm = true
 	info.dialnorm = ac3DialnormDB(dialnorm)
+	info.dialnormCode = uint8(dialnorm)
 	info.dialnormCount = 1
 	info.dialnormSum = math.Pow(10.0, float64(info.dialnorm)/10.0)
 	info.dialnormMin = info.dialnorm
@@ -224,14 +240,12 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		if !ok {
 			return info, 0, false
 		}
+		info.compre = true
+		info.comprCode = uint8(compr)
 		info.comprFieldDB = ac3ComprDB(uint8(compr))
 		info.hasComprField = true
 		info.hasCompr = true
 		info.comprDB = info.comprFieldDB
-		info.comprSum = math.Pow(10.0, info.comprDB/10.0)
-		info.comprCount = 1
-		info.comprMin = info.comprDB
-		info.comprMax = info.comprDB
 	}
 	langcode, ok := br.readBits(1)
 	if !ok {
@@ -268,22 +282,47 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	if _, ok := br.readBits(1); !ok { // origbs
 		return info, 0, false
 	}
-	timecod1e, ok := br.readBits(1)
-	if !ok {
-		return info, 0, false
-	}
-	if timecod1e == 1 {
-		if _, ok := br.readBits(14); !ok {
+	if bsid == 6 {
+		// bsid==0x06 repurposes the timecode bits for Dolby extensions (xbsi1/xbsi2).
+		// Match MediaInfoLib File_Ac3.cpp bit layout to keep subsequent parsing aligned.
+		xbsi1e, ok := br.readBits(1)
+		if !ok {
 			return info, 0, false
 		}
-	}
-	timecod2e, ok := br.readBits(1)
-	if !ok {
-		return info, 0, false
-	}
-	if timecod2e == 1 {
-		if _, ok := br.readBits(14); !ok {
+		if xbsi1e == 1 {
+			// dmixmod (2) + ltrtcmixlev (3) + ltrtsurmixlev (3) + lorocmixlev (3) + lorosurmixlev (3)
+			if _, ok := br.readBits(14); !ok {
+				return info, 0, false
+			}
+		}
+		xbsi2e, ok := br.readBits(1)
+		if !ok {
 			return info, 0, false
+		}
+		if xbsi2e == 1 {
+			// dsurexmod (2) + dheadphonmod (2) + adconvtyp (1) + xbsi2 (8) + encinfo (1)
+			if _, ok := br.readBits(14); !ok {
+				return info, 0, false
+			}
+		}
+	} else {
+		timecod1e, ok := br.readBits(1)
+		if !ok {
+			return info, 0, false
+		}
+		if timecod1e == 1 {
+			if _, ok := br.readBits(14); !ok {
+				return info, 0, false
+			}
+		}
+		timecod2e, ok := br.readBits(1)
+		if !ok {
+			return info, 0, false
+		}
+		if timecod2e == 1 {
+			if _, ok := br.readBits(14); !ok {
+				return info, 0, false
+			}
 		}
 	}
 	addbsie, ok := br.readBits(1)
@@ -302,15 +341,14 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		}
 	}
 	if dynrnge, code, ok := parseAC3Dynrng(&br, int(acmod)); ok {
+		info.dynrngParsed = true
+		info.dynrnge = dynrnge
 		if dynrnge {
-			info.dynrngeSeen = true
-			value := ac3DynrngDB(code)
-			info.dynrngDB = value
+			info.dynrngCode = code
+			info.dynrngDB = ac3DynrngDB(code)
 			info.hasDynrng = true
-			info.dynrngSum = math.Pow(10.0, value/10.0)
-			info.dynrngCount = 1
-			info.dynrngMin = value
-			info.dynrngMax = value
+		} else {
+			info.dynrngCode = 0
 		}
 	}
 
@@ -338,12 +376,15 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		frameRate:     frameRate,
 		spf:           spf,
 		dialnorm:      info.dialnorm,
+		dialnormCode:  info.dialnormCode,
 		dialnormSum:   info.dialnormSum,
 		dialnormCount: info.dialnormCount,
 		dialnormMin:   info.dialnormMin,
 		dialnormMax:   info.dialnormMax,
 		hasDialnorm:   info.hasDialnorm,
 		comprDB:       info.comprDB,
+		compre:        info.compre,
+		comprCode:     info.comprCode,
 		comprCount:    info.comprCount,
 		comprSum:      info.comprSum,
 		comprSumDB:    info.comprSumDB,
@@ -355,6 +396,9 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		hasComprField: info.hasComprField,
 		dynrngDB:      info.dynrngDB,
 		hasDynrng:     info.hasDynrng,
+		dynrnge:       info.dynrnge,
+		dynrngCode:    info.dynrngCode,
+		dynrngParsed:  info.dynrngParsed,
 		dynrngSum:     info.dynrngSum,
 		dynrngCount:   info.dynrngCount,
 		dynrngMin:     info.dynrngMin,
@@ -444,6 +488,7 @@ func parseEAC3FrameWithOptions(payload []byte, parseJOC bool) (ac3Info, int, boo
 		}
 		info.hasDialnorm = true
 		info.dialnorm = ac3DialnormDB(dialnorm)
+		info.dialnormCode = uint8(dialnorm)
 		info.dialnormCount = 1
 		info.dialnormSum = math.Pow(10.0, float64(info.dialnorm)/10.0)
 		info.dialnormMin = info.dialnorm
@@ -458,13 +503,9 @@ func parseEAC3FrameWithOptions(payload []byte, parseJOC bool) (ac3Info, int, boo
 			if !ok {
 				return info, 0, false
 			}
+			info.compre = true
+			info.comprCode = uint8(compr)
 			info.comprDB = ac3ComprDB(uint8(compr))
-			if compr != 0xFF {
-				info.comprSum = math.Pow(10.0, info.comprDB/10.0)
-				info.comprCount = 1
-				info.comprMin = info.comprDB
-				info.comprMax = info.comprDB
-			}
 			info.hasCompr = true
 		}
 	}
@@ -499,12 +540,15 @@ func parseEAC3FrameWithOptions(payload []byte, parseJOC bool) (ac3Info, int, boo
 		frameRate:     frameRate,
 		spf:           spf,
 		dialnorm:      info.dialnorm,
+		dialnormCode:  info.dialnormCode,
 		dialnormSum:   info.dialnormSum,
 		dialnormCount: info.dialnormCount,
 		dialnormMin:   info.dialnormMin,
 		dialnormMax:   info.dialnormMax,
 		hasDialnorm:   info.hasDialnorm,
 		comprDB:       info.comprDB,
+		compre:        info.compre,
+		comprCode:     info.comprCode,
 		comprCount:    info.comprCount,
 		comprSum:      info.comprSum,
 		comprMin:      info.comprMin,
@@ -557,6 +601,20 @@ func eac3SamplesPerFrame(numblkscod int) int {
 }
 
 func (info *ac3Info) mergeFrame(frame ac3Info) {
+	if info.framesMerged == 0 {
+		// Base fields are first-frame-only in MediaInfo.
+		info.hasCompr = frame.compre
+		if frame.compre {
+			info.hasComprField = true
+			info.comprFieldDB = frame.comprDB
+			info.comprDB = frame.comprDB
+		}
+		info.hasDynrng = frame.dynrnge
+		if frame.dynrnge {
+			info.dynrngDB = frame.dynrngDB
+		}
+	}
+
 	if frame.bitRateKbps > 0 && info.bitRateKbps == 0 {
 		info.bitRateKbps = frame.bitRateKbps
 	}
@@ -602,38 +660,28 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 		info.surmixlevDB = frame.surmixlevDB
 		info.hasSurmixlev = true
 	}
-	if frame.hasComprField {
-		if !info.hasComprField || frame.comprFieldDB > info.comprFieldDB {
-			info.comprFieldDB = frame.comprFieldDB
-			info.hasComprField = true
+
+	// Stats: histogram-based to match MediaInfo.
+	if info.comprs == nil {
+		info.comprs = make([]uint32, 256)
+	}
+	if info.dynrngs == nil {
+		info.dynrngs = make([]uint32, 256)
+	}
+	if frame.compre {
+		// MediaInfoLib uses 0xFF as the "unset" initializer for compr. When compre is set but the
+		// value is still 0xFF, it is effectively treated as not present for stats (but may still
+		// be used for the single-value "compr" field).
+		if frame.comprCode != 0xFF {
+			info.comprs[frame.comprCode]++
 		}
 	}
-	if frame.hasCompr && !info.hasCompr {
-		info.comprDB = frame.comprDB
-		info.hasCompr = true
+	if frame.dynrnge {
+		info.dynrngeSeen = true
 	}
-	if frame.comprCount > 0 {
-		if info.comprCount == 0 {
-			info.comprIsDB = frame.comprIsDB
-			info.comprSum = frame.comprSum
-			info.comprSumDB = frame.comprSumDB
-			info.comprCount = frame.comprCount
-			info.comprMin = frame.comprMin
-			info.comprMax = frame.comprMax
-		} else {
-			if info.comprIsDB {
-				info.comprSumDB += frame.comprSumDB
-			} else {
-				info.comprSum += frame.comprSum
-			}
-			info.comprCount += frame.comprCount
-			if frame.comprMin < info.comprMin {
-				info.comprMin = frame.comprMin
-			}
-			if frame.comprMax > info.comprMax {
-				info.comprMax = frame.comprMax
-			}
-		}
+	if frame.dynrngParsed {
+		// MediaInfoLib always counts dynrng. If dynrnge is absent, dynrng is treated as 0.
+		info.dynrngs[frame.dynrngCode]++
 	}
 	if frame.hasMixlevel && !info.hasMixlevel {
 		info.mixlevel = frame.mixlevel
@@ -643,30 +691,6 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 		info.roomtyp = frame.roomtyp
 		info.hasRoomtyp = true
 	}
-	if frame.hasDynrng && !info.hasDynrng {
-		info.dynrngDB = frame.dynrngDB
-		info.hasDynrng = true
-	}
-	if frame.dynrngeSeen {
-		info.dynrngeSeen = true
-	}
-	if frame.dynrngCount > 0 {
-		if info.dynrngCount == 0 {
-			info.dynrngSum = frame.dynrngSum
-			info.dynrngCount = frame.dynrngCount
-			info.dynrngMin = frame.dynrngMin
-			info.dynrngMax = frame.dynrngMax
-		} else {
-			info.dynrngSum += frame.dynrngSum
-			info.dynrngCount += frame.dynrngCount
-			if frame.dynrngMin < info.dynrngMin {
-				info.dynrngMin = frame.dynrngMin
-			}
-			if frame.dynrngMax > info.dynrngMax {
-				info.dynrngMax = frame.dynrngMax
-			}
-		}
-	}
 	if frame.hasDialnorm {
 		if info.dialnormCount == 0 {
 			info.dialnorm = frame.dialnorm
@@ -675,15 +699,15 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 			info.dialnormMin = frame.dialnormMin
 			info.dialnormMax = frame.dialnormMax
 			info.hasDialnorm = true
-			return
-		}
-		info.dialnormSum += frame.dialnormSum
-		info.dialnormCount += frame.dialnormCount
-		if frame.dialnormMin < info.dialnormMin {
-			info.dialnormMin = frame.dialnormMin
-		}
-		if frame.dialnormMax > info.dialnormMax {
-			info.dialnormMax = frame.dialnormMax
+		} else {
+			info.dialnormSum += frame.dialnormSum
+			info.dialnormCount += frame.dialnormCount
+			if frame.dialnormMin < info.dialnormMin {
+				info.dialnormMin = frame.dialnormMin
+			}
+			if frame.dialnormMax > info.dialnormMax {
+				info.dialnormMax = frame.dialnormMax
+			}
 		}
 		info.hasDialnorm = true
 	}
@@ -706,6 +730,8 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 		info.jocBedCount = frame.jocBedCount
 		info.jocBedLayout = frame.jocBedLayout
 	}
+
+	info.framesMerged++
 }
 
 func (info ac3Info) dialnormStats() (int, int, int, bool) {
@@ -717,24 +743,61 @@ func (info ac3Info) dialnormStats() (int, int, int, bool) {
 }
 
 func (info ac3Info) comprStats() (float64, float64, float64, int, bool) {
-	if info.comprCount == 0 {
+	if len(info.comprs) == 0 {
 		return 0, 0, 0, 0, false
 	}
-	var avg float64
-	if info.comprIsDB {
-		avg = info.comprSumDB / float64(info.comprCount)
-	} else {
-		avg = 10.0 * math.Log10(info.comprSum/float64(info.comprCount))
+	sumIntensity := 0.0
+	count := 0
+	minVal := math.Inf(1)
+	maxVal := math.Inf(-1)
+	for code, c := range info.comprs {
+		if c == 0 {
+			continue
+		}
+		value := ac3ComprDB(uint8(code))
+		if value < minVal {
+			minVal = value
+		}
+		if value > maxVal {
+			maxVal = value
+		}
+		sumIntensity += float64(c) * math.Pow(10.0, value/10.0)
+		count += int(c)
 	}
-	return avg, info.comprMin, info.comprMax, info.comprCount, true
+	if count == 0 {
+		return 0, 0, 0, 0, false
+	}
+	avg := 10.0 * math.Log10(sumIntensity/float64(count))
+	return avg, minVal, maxVal, count, true
 }
 
 func (info ac3Info) dynrngStats() (float64, float64, float64, int, bool) {
-	if info.dynrngCount == 0 || !info.dynrngeSeen {
+	if len(info.dynrngs) == 0 || !info.dynrngeSeen {
 		return 0, 0, 0, 0, false
 	}
-	avg := 10.0 * math.Log10(info.dynrngSum/float64(info.dynrngCount))
-	return avg, info.dynrngMin, info.dynrngMax, info.dynrngCount, true
+	sumIntensity := 0.0
+	count := 0
+	minVal := math.Inf(1)
+	maxVal := math.Inf(-1)
+	for code, c := range info.dynrngs {
+		if c == 0 {
+			continue
+		}
+		value := ac3DynrngDB(uint8(code))
+		if value < minVal {
+			minVal = value
+		}
+		if value > maxVal {
+			maxVal = value
+		}
+		sumIntensity += float64(c) * math.Pow(10.0, value/10.0)
+		count += int(c)
+	}
+	if count == 0 {
+		return 0, 0, 0, 0, false
+	}
+	avg := 10.0 * math.Log10(sumIntensity/float64(count))
+	return avg, minVal, maxVal, count, true
 }
 
 func ac3SampleRate(code int) float64 {

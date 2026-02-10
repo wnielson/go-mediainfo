@@ -1245,6 +1245,11 @@ func parseMatroskaTrackEntry(buf []byte, segmentDuration float64, durationPrec i
 		}
 		pos = dataEnd
 	}
+	// Matroska TrackEntry Language defaults to "eng" when absent.
+	// Official mediainfo emits Language=en in this case.
+	if trackLanguage == "" && trackLanguageIETF == "" {
+		trackLanguage = "eng"
+	}
 	displayLanguage := trackLanguage
 	if displayLanguage == "" {
 		displayLanguage = trackLanguageIETF
