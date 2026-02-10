@@ -50,8 +50,8 @@ func TestProbeMatroskaAudio_EAC3MultiFramePacket(t *testing.T) {
 		if p == nil || !p.ok {
 			t.Fatalf("probe ok=%v, want true", p != nil && p.ok)
 		}
-		if p.info.comprCount != 2 {
-			t.Fatalf("comprCount=%d, want 2", p.info.comprCount)
+		if p.info.framesMerged != 2 {
+			t.Fatalf("framesMerged=%d, want 2", p.info.framesMerged)
 		}
 		if p.info.dialnormCount != 2 {
 			t.Fatalf("dialnormCount=%d, want 2", p.info.dialnormCount)
