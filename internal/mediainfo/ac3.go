@@ -187,7 +187,9 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 			return info, 0, false
 		}
 	} else {
-		if acmod&1 != 0 {
+		// acmod==1 is mono (C); it does not carry cmixlev. Reading it would shift the bitstream
+		// and corrupt downstream fields (e.g. lfeon/dialnorm/compr), which breaks TS parity.
+		if acmod&1 != 0 && acmod != 1 {
 			cmixlev, ok := br.readBits(2)
 			if !ok {
 				return info, 0, false
