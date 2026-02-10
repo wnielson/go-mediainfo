@@ -36,8 +36,9 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 
 	format := DetectFormat(header, path)
 
-	// MediaInfo CLI does not apply continuous file name aggregation to BDAV (.m2ts) streams by default.
-	if opts.TestContinuousFileNames && format == "MPEG-TS" {
+	// MediaInfo CLI continuous file names behavior (File_TestContinuousFileNames=1) applies to both
+	// MPEG-TS and BDAV (M2TS) streams.
+	if opts.TestContinuousFileNames && (format == "MPEG-TS" || format == "BDAV") {
 		if set, ok := detectContinuousFileSet(path); ok {
 			completeNameLast = set.LastPath
 			fileSize = set.TotalSize
@@ -597,7 +598,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 		}
 	case "MPEG-TS":
-		if parsedInfo, parsedStreams, generalFields, ok := ParseMPEGTS(file, stat.Size()); ok {
+		if parsedInfo, parsedStreams, generalFields, ok := ParseMPEGTS(file, stat.Size(), opts.ParseSpeed); ok {
 			info = parsedInfo
 			general.JSON = map[string]string{}
 			general.JSONRaw = map[string]string{}
@@ -675,7 +676,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			})
 		}
 	case "BDAV":
-		if parsedInfo, parsedStreams, generalFields, ok := ParseBDAV(file, stat.Size()); ok {
+		if parsedInfo, parsedStreams, generalFields, ok := ParseBDAV(file, stat.Size(), opts.ParseSpeed); ok {
 			info = parsedInfo
 			general.JSON = map[string]string{}
 			general.JSONRaw = map[string]string{}
@@ -724,7 +725,7 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 				if f, err := os.Open(completeNameLast); err == nil {
 					if st, err := f.Stat(); err == nil {
 						lastSize = st.Size()
-						if li, ls, _, ok := ParseBDAV(f, st.Size()); ok && li.DurationSeconds > 0 {
+						if li, ls, _, ok := ParseBDAV(f, st.Size(), opts.ParseSpeed); ok && li.DurationSeconds > 0 {
 							lastInfo = li
 							lastStreams = ls
 						}
@@ -926,8 +927,14 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 							}
 							if parsed, err := strconv.ParseFloat(streams[i].JSON["FrameRate"], 64); err == nil && parsed > 0 {
 								frameRate = parsed
-							} else if parsed, ok := parseFPS(findField(streams[i].Fields, "Frame rate")); ok && parsed > 0 {
-								frameRate = parsed
+							} else if frField := findField(streams[i].Fields, "Frame rate"); frField != "" {
+								// Match MediaInfoLib: use the numeric FrameRate float value first, not the (Num/Den) ratio.
+								// The ratio is exposed separately as FrameRate_Num/Den in JSON.
+								if frValue := extractLeadingNumber(frField); frValue != "" {
+									if fr, err := strconv.ParseFloat(frValue, 64); err == nil && fr > 0 {
+										frameRate = fr
+									}
+								}
 							}
 							if parsed, ok := parseInt(streams[i].JSON["FrameCount"]); ok && parsed > 0 {
 								frameCount = parsed

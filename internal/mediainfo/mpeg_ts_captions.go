@@ -17,16 +17,6 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 		return
 	}
 	duration := ptsDuration(video.pts)
-	if video.format == "MPEG Video" && video.hasMPEG2Info && video.videoFrameCount > 0 {
-		info := video.mpeg2Info
-		if info.FrameRateNumer > 0 && info.FrameRateDenom > 0 {
-			duration = float64(video.videoFrameCount) * float64(info.FrameRateDenom) / float64(info.FrameRateNumer)
-			duration = math.Round(duration*1000) / 1000
-		} else if info.FrameRate > 0 {
-			duration = float64(video.videoFrameCount) / info.FrameRate
-			duration = math.Round(duration*1000) / 1000
-		}
-	}
 	if duration <= 0 {
 		return
 	}
@@ -41,6 +31,11 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 		} else if video.mpeg2Info.FrameRate > 0 {
 			fps = video.mpeg2Info.FrameRate
 		}
+	}
+	if fps > 0 {
+		// PTS deltas cover (N-1) frame intervals; official mediainfo reports full duration (N intervals).
+		duration += 1.0 / fps
+		duration = math.Round(duration*1000) / 1000
 	}
 	menuID := video.programNumber
 	videoPID := video.pid

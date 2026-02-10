@@ -679,8 +679,9 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 	if frame.dynrnge {
 		info.dynrngeSeen = true
 	}
+	// MediaInfoLib counts dynrng for every parsed frame, using 0 when dynrnge is absent.
+	// The dynrng_* fields are only emitted if dynrnge has been seen at least once.
 	if frame.dynrngParsed {
-		// MediaInfoLib always counts dynrng. If dynrnge is absent, dynrng is treated as 0.
 		info.dynrngs[frame.dynrngCode]++
 	}
 	if frame.hasMixlevel && !info.hasMixlevel {
@@ -710,6 +711,104 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 			}
 		}
 		info.hasDialnorm = true
+	}
+	if frame.hasJOC && !info.hasJOC {
+		info.hasJOC = true
+	}
+	if frame.hasJOCComplex && !info.hasJOCComplex {
+		info.hasJOCComplex = true
+		info.jocComplexity = frame.jocComplexity
+	}
+	if frame.jocObjects > 0 && info.jocObjects == 0 {
+		info.jocObjects = frame.jocObjects
+	}
+	if frame.hasJOCDyn && !info.hasJOCDyn {
+		info.hasJOCDyn = true
+		info.jocDynObjects = frame.jocDynObjects
+	}
+	if frame.hasJOCBed && !info.hasJOCBed {
+		info.hasJOCBed = true
+		info.jocBedCount = frame.jocBedCount
+		info.jocBedLayout = frame.jocBedLayout
+	}
+
+	info.framesMerged++
+}
+
+// mergeFrameBase updates only the first-frame metadata fields used for single-value JSON/text
+// output (e.g. dialnorm/compr/dynrng), without accumulating histogram-based stats.
+// This is used for TS/BDAV where MediaInfoLib may compute *_Average/*_Count from a bounded window.
+func (info *ac3Info) mergeFrameBase(frame ac3Info) {
+	if info.framesMerged == 0 {
+		// Base fields are first-frame-only in MediaInfo.
+		info.hasCompr = frame.compre
+		if frame.compre {
+			info.hasComprField = true
+			info.comprFieldDB = frame.comprDB
+			info.comprDB = frame.comprDB
+		}
+		info.hasDynrng = frame.dynrnge
+		if frame.dynrnge {
+			info.dynrngDB = frame.dynrngDB
+		}
+		if frame.hasDialnorm {
+			info.dialnorm = frame.dialnorm
+			info.hasDialnorm = true
+		}
+	}
+
+	if frame.bitRateKbps > 0 && info.bitRateKbps == 0 {
+		info.bitRateKbps = frame.bitRateKbps
+	}
+	if frame.sampleRate > 0 && info.sampleRate == 0 {
+		info.sampleRate = frame.sampleRate
+	}
+	if frame.channels > 0 && info.channels == 0 {
+		info.channels = frame.channels
+	}
+	if frame.layout != "" && info.layout == "" {
+		info.layout = frame.layout
+	}
+	if frame.bsid > 0 && info.bsid == 0 {
+		info.bsid = frame.bsid
+	}
+	if frame.bsmod > 0 && info.bsmod == 0 {
+		info.bsmod = frame.bsmod
+	}
+	if frame.acmod > 0 && info.acmod == 0 {
+		info.acmod = frame.acmod
+	}
+	if frame.hasDsurmod && !info.hasDsurmod {
+		info.dsurmod = frame.dsurmod
+		info.hasDsurmod = true
+	}
+	if frame.lfeon > 0 && info.lfeon == 0 {
+		info.lfeon = frame.lfeon
+	}
+	if frame.serviceKind != "" && info.serviceKind == "" {
+		info.serviceKind = frame.serviceKind
+	}
+	if frame.frameRate > 0 && info.frameRate == 0 {
+		info.frameRate = frame.frameRate
+	}
+	if frame.spf > 0 && info.spf == 0 {
+		info.spf = frame.spf
+	}
+	if frame.hasCmixlev && !info.hasCmixlev {
+		info.cmixlevDB = frame.cmixlevDB
+		info.hasCmixlev = true
+	}
+	if frame.hasSurmixlev && !info.hasSurmixlev {
+		info.surmixlevDB = frame.surmixlevDB
+		info.hasSurmixlev = true
+	}
+	if frame.hasMixlevel && !info.hasMixlevel {
+		info.mixlevel = frame.mixlevel
+		info.hasMixlevel = true
+	}
+	if frame.hasRoomtyp && !info.hasRoomtyp {
+		info.roomtyp = frame.roomtyp
+		info.hasRoomtyp = true
 	}
 	if frame.hasJOC && !info.hasJOC {
 		info.hasJOC = true

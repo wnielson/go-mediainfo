@@ -22,11 +22,16 @@ type tsStream struct {
 	pts                 ptsTracker
 	lastPTS             uint64
 	hasLastPTS          bool
+	seenPTS             bool
 	pesPayloadRemaining int
 	pesPayloadKnown     bool
 	hasAC3              bool
 	ac3Info             ac3Info
-	ac3StatsBytes       uint64
+	ac3Stats            ac3Info
+	ac3Head             []ac3Info
+	ac3Tail             []ac3Info
+	ac3TailPos          int
+	ac3TailFull         bool
 	width               uint64
 	height              uint64
 	storedHeight        uint64
@@ -50,16 +55,22 @@ type tsStream struct {
 	audioChannels       uint64
 	hasAudioInfo        bool
 	audioFrames         uint64
-	audioSpf            int
-	audioBitRateKbps    int64
-	audioBitRateMode    string
-	videoFrameRate      float64
-	pesData             []byte
-	audioBuffer         []byte
-	audioStarted        bool
-	videoStarted        bool
-	writingLibrary      string
-	encoding            string
+	// Number of parsed AC-3/E-AC-3 frames that contributed to metadata stats sampling (bounded by
+	// MediaInfoLib ParseSpeed window logic).
+	audioFramesStats uint64
+	// Same as audioFramesStats, but counted only from the initial (head) scan window. MediaInfoLib
+	// bases the 0.75*N+4 sampling size on the first pass, even if it later scans from the end.
+	audioFramesStatsHead uint64
+	audioSpf             int
+	audioBitRateKbps     int64
+	audioBitRateMode     string
+	videoFrameRate       float64
+	pesData              []byte
+	audioBuffer          []byte
+	audioStarted         bool
+	videoStarted         bool
+	writingLibrary       string
+	encoding             string
 	// MPEG-2 GA94 caption user data is reordered by temporal_reference in MediaInfoLib before
 	// feeding the DTVCC/XDS parsers. We keep a small per-GOP buffer for XDS only.
 	mpeg2CurTemporalReference uint16
@@ -76,16 +87,20 @@ type mpeg2UserDataPacket struct {
 	data              []byte
 }
 
-func ParseMPEGTS(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field, bool) {
-	return parseMPEGTSWithPacketSize(file, size, 188)
+func ParseMPEGTS(file io.ReadSeeker, size int64, parseSpeed float64) (ContainerInfo, []Stream, []Field, bool) {
+	return parseMPEGTSWithPacketSize(file, size, 188, parseSpeed)
 }
 
 // ParseBDAV parses BDAV/M2TS streams (192-byte packets: 4-byte timestamp + 188-byte TS packet).
-func ParseBDAV(file io.ReadSeeker, size int64) (ContainerInfo, []Stream, []Field, bool) {
-	return parseMPEGTSWithPacketSize(file, size, 192)
+func ParseBDAV(file io.ReadSeeker, size int64, parseSpeed float64) (ContainerInfo, []Stream, []Field, bool) {
+	return parseMPEGTSWithPacketSize(file, size, 192, parseSpeed)
 }
 
 const tsPTSGap = 30 * 90000 // 30 seconds
+
+// MediaInfoLib default: scan up to 64 MiB from the beginning and end of a TS when ParseSpeed<0.8.
+// We use this window size for TS/BDAV AC-3 stats sampling to match official outputs at ParseSpeed=0.5.
+const tsStatsMaxOffset = 64 * 1024 * 1024
 
 func ptsDuration(t ptsTracker) float64 {
 	if t.hasResets() {
@@ -134,6 +149,15 @@ func addPTS(t *ptsTracker, pts uint64) {
 	t.add(pts)
 }
 
+func addPTSMode(t *ptsTracker, pts uint64, breakOnGap bool) {
+	if breakOnGap {
+		addPTS(t, pts)
+		return
+	}
+	// Partial TS/BDAV scans intentionally skip large regions; don't treat missing sections as discontinuities.
+	t.add(pts)
+}
+
 func findTSSyncOffset(file io.ReadSeeker, packetSize int64, tsOffset int64, size int64) (int64, bool) {
 	// Some TS/M2TS files have leading junk bytes and are not packet-aligned at offset 0.
 	// Find the first offset where multiple consecutive packets have the 0x47 sync byte.
@@ -175,7 +199,7 @@ func findTSSyncOffset(file io.ReadSeeker, packetSize int64, tsOffset int64, size
 	return 0, false
 }
 
-func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64) (ContainerInfo, []Stream, []Field, bool) {
+func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64, parseSpeed float64) (ContainerInfo, []Stream, []Field, bool) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return ContainerInfo{}, nil, nil, false
 	}
@@ -206,6 +230,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 		endPCR      uint64
 		startOffset int64
 		endOffset   int64
+		over30s     bool
 		ok          bool
 	}
 	pcrSpans := map[uint16]*pcrSpan{}
@@ -220,407 +245,557 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 		tsOffset = 4
 	}
 
+	syncOff := int64(0)
 	if off, ok := findTSSyncOffset(file, packetSize, tsOffset, size); ok {
-		if _, err := file.Seek(off, io.SeekStart); err != nil {
-			return ContainerInfo{}, nil, nil, false
-		}
-	} else {
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return ContainerInfo{}, nil, nil, false
-		}
+		syncOff = off
 	}
 
-	reader := bufio.NewReaderSize(file, 1<<20)
-	buf := make([]byte, packetSize*2048)
-	var packetIndex int64
+	// With ParseSpeed<0.8, MediaInfoLib scans bounded windows from the beginning/end of large TS/BDAV.
+	// This avoids full sequential reads for multi-GB streams while still capturing PTS/PCR and metadata.
+	partialScan := parseSpeed < 0.8 && size > 0 && size > 2*tsStatsMaxOffset
+	ac3StatsBounded := parseSpeed < 0.8 && size > 0
+	ac3StatsHeadBytes := int64(tsStatsMaxOffset)
+	ac3StatsHeadLocked := false
+
+	maybeLockAC3HeadByPCR := func(packetOffset int64) {
+		if !ac3StatsBounded || ac3StatsHeadLocked || size <= 0 {
+			return
+		}
+		// MediaInfoLib uses a time-based bound (~30s default) for the initial scan when ParseSpeed<0.8,
+		// and may shrink the begin/end byte windows once all PCR streams have exceeded it.
+		if packetOffset*2 >= size {
+			return
+		}
+		if len(pcrSpans) == 0 {
+			return
+		}
+		over := 0
+		for _, sp := range pcrSpans {
+			if sp != nil && sp.over30s {
+				over++
+			}
+		}
+		if over == 0 || over != len(pcrSpans) {
+			return
+		}
+		if packetOffset < syncOff {
+			return
+		}
+		rel := packetOffset - syncOff
+		ac3StatsHeadBytes = min(int64(tsStatsMaxOffset), rel+packetSize)
+		ac3StatsHeadLocked = true
+	}
+
+	// Per-PID payload byte counts (TS payload only, excludes BDAV prefix + TS header/adaptation).
+	// Used to estimate overall overhead when we don't scan the full file.
+	pidPayloadBytes := map[uint16]int64{}
+
 	var tsPacketCount int64
 	var psiBytes int64
-	var carry int
-	for {
-		n, err := reader.Read(buf[carry:])
-		if n == 0 && err != nil {
-			break
+	headStoppedEarly := false
+	headScannedEnd := int64(0)
+	scanRange := func(start, end int64, shrinkHead bool) bool {
+		if start < 0 {
+			start = 0
 		}
-		n += carry
-		packetCount := n / int(packetSize)
-		for i := 0; i < packetCount; i++ {
-			packet := buf[int64(i)*packetSize : (int64(i)+1)*packetSize]
-			packetIndex++
-			if tsOffset+tsPacketSize > int64(len(packet)) {
-				continue
+		if size > 0 && end > size {
+			end = size
+		}
+		if end <= start {
+			return true
+		}
+		if _, err := file.Seek(start, io.SeekStart); err != nil {
+			return false
+		}
+		r := io.Reader(file)
+		if end > start {
+			r = io.LimitReader(file, end-start)
+		}
+		reader := bufio.NewReaderSize(r, 1<<20)
+		buf := make([]byte, packetSize*2048)
+		var packetIndex int64
+		carry := 0
+		for {
+			n, err := reader.Read(buf[carry:])
+			if n == 0 && err != nil {
+				break
 			}
-			ts := packet[tsOffset : tsOffset+tsPacketSize]
-			if ts[0] != 0x47 {
-				continue
-			}
-			tsPacketCount++
-			pid := uint16(ts[1]&0x1F)<<8 | uint16(ts[2])
-			payloadStart := ts[1]&0x40 != 0
-			adaptation := (ts[3] & 0x30) >> 4
-			payloadIndex := 4
-			if adaptation == 2 || adaptation == 3 {
-				adaptationLen := int(ts[4])
-				payloadIndex += 1 + adaptationLen
-			}
-			if _, ok := pcrPIDs[pid]; ok {
-				if pcr27, ok := parsePCR27(ts); ok {
-					pcrFull.add(pcr27)
-					// Keep legacy 90kHz PCR base for fields/flows that expect it.
-					pcrPTS.add(pcr27 / 300)
-					offset := (packetIndex - 1) * packetSize
-					span := pcrSpans[pid]
-					if span == nil {
-						span = &pcrSpan{}
-						pcrSpans[pid] = span
-					}
-					if !span.ok {
-						span.startPCR = pcr27
-						span.startOffset = offset
-						span.ok = true
-					}
-					span.endPCR = pcr27
-					span.endOffset = offset
+			n += carry
+			packetCount := n / int(packetSize)
+			for i := 0; i < packetCount; i++ {
+				packet := buf[int64(i)*packetSize : (int64(i)+1)*packetSize]
+				packetIndex++
+				packetOffset := start + (packetIndex-1)*packetSize
+				if shrinkHead {
+					headScannedEnd = packetOffset + packetSize
 				}
-			}
-			if adaptation == 2 {
-				continue
-			}
-			if payloadIndex >= len(ts) {
-				continue
-			}
-			payload := ts[payloadIndex:]
-
-			if pid == 0x1F && payloadStart {
-				if sectionBytes := psiSectionBytes(payload); sectionBytes > 0 {
-					psiBytes += int64(sectionBytes)
+				// MediaInfoLib can shrink MpegTs_JumpTo_Begin based on PCR distance (~30s default at ParseSpeed<0.8),
+				// and then stops parsing the head scan at the reduced byte window.
+				if shrinkHead && ac3StatsHeadLocked && packetOffset >= syncOff+ac3StatsHeadBytes {
+					headStoppedEarly = true
+					headScannedEnd = packetOffset
+					return true
 				}
-				continue
-			}
-
-			if pid == 0 && payloadStart {
-				programs, sectionBytes := parsePAT(payload)
-				if sectionBytes > 0 {
-					psiBytes += int64(sectionBytes)
-				}
-				for _, prog := range programs {
-					if _, ok := pmtPIDToProgram[prog.PMTPID]; !ok {
-						pmtPIDToProgram[prog.PMTPID] = prog.ProgramNumber
-					}
-					if primaryProgramNumber == 0 {
-						primaryProgramNumber = prog.ProgramNumber
-						primaryPMTPID = prog.PMTPID
-					}
-				}
-				continue
-			}
-			if pid == 0x11 && payloadStart {
-				name, provider, svcType := parseSDT(payload, primaryProgramNumber)
-				if name != "" {
-					serviceName = name
-				}
-				if provider != "" {
-					serviceProvider = provider
-				}
-				if svcType != "" {
-					serviceType = svcType
-				}
-				continue
-			}
-			if programNumber, ok := pmtPIDToProgram[pid]; ok {
-				asm := pmtAssemblies[pid]
-				if asm == nil {
-					asm = &psiAssembly{}
-					pmtAssemblies[pid] = asm
-				}
-				if payloadStart {
-					pointer := int(payload[0])
-					if 1+pointer > len(payload) {
-						continue
-					}
-					asm.buf = append(asm.buf[:0], payload[1+pointer:]...)
-					asm.expected = asm.expectedLen()
-				} else if len(asm.buf) > 0 {
-					asm.buf = append(asm.buf, payload...)
-					if asm.expected == 0 {
-						asm.expected = asm.expectedLen()
-					}
-				}
-				if asm.expected > 0 && len(asm.buf) >= asm.expected {
-					section := asm.buf[:asm.expected]
-					pmPayload := append([]byte{0}, section...)
-					parsed, pcr, pointer, sectionLen := parsePMT(pmPayload, programNumber)
-					if pcr != 0 {
-						pcrPIDs[pcr] = struct{}{}
-					}
-					// MediaInfo's General.StreamSize for BDAV behaves closer to counting
-					// non-A/V (subtitle) PMT entries than full PMT section payload.
-					textCount := 0
-					for _, st := range parsed {
-						if st.kind == StreamText {
-							textCount++
-						}
-					}
-					psiBytes += int64(textCount * 5)
-					if pid == primaryPMTPID {
-						if sectionLen > 0 {
-							pmtPointer = pointer
-							pmtSectionLen = sectionLen
-						}
-					}
-					for _, st := range parsed {
-						if existing, exists := streams[st.pid]; exists {
-							existing.kind = st.kind
-							existing.format = st.format
-							existing.streamType = st.streamType
-							existing.programNumber = st.programNumber
-							existing.language = st.language
-							if pending, ok := pendingPTS[st.pid]; ok {
-								existing.pts = *pending
-								if st.kind == StreamVideo {
-									videoPTS.add(pending.min)
-									videoPTS.add(pending.max)
-								}
-								delete(pendingPTS, st.pid)
-							}
-						} else {
-							entry := st
-							if pending, ok := pendingPTS[st.pid]; ok {
-								entry.pts = *pending
-								if st.kind == StreamVideo {
-									videoPTS.add(pending.min)
-									videoPTS.add(pending.max)
-								}
-								delete(pendingPTS, st.pid)
-							}
-							streams[st.pid] = &entry
-							streamOrder = append(streamOrder, st.pid)
-						}
-						if st.kind == StreamVideo {
-							videoPIDs[st.pid] = struct{}{}
-							if st.format == "MPEG Video" {
-								hasMPEGVideo = true
-							}
-						}
-					}
-					asm.reset()
-				}
-				continue
-			}
-
-			pesStart := payloadStart && len(payload) >= 9 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01
-			if pesStart {
-				flags := payload[7]
-				headerLen := int(payload[8])
-				if len(payload) < 9+headerLen {
+				if tsOffset+tsPacketSize > int64(len(packet)) {
 					continue
 				}
-				if flags&0x80 != 0 {
-					if pts, ok := parsePTS(payload[9:]); ok {
-						addPTS(&anyPTS, pts)
-						if entry, ok := streams[pid]; ok {
-							addPTS(&entry.pts, pts)
-							entry.lastPTS = pts
-							entry.hasLastPTS = true
-							if _, ok := videoPIDs[pid]; ok {
-								addPTS(&videoPTS, pts)
+				ts := packet[tsOffset : tsOffset+tsPacketSize]
+				if ts[0] != 0x47 {
+					continue
+				}
+				tsPacketCount++
+				pid := uint16(ts[1]&0x1F)<<8 | uint16(ts[2])
+				payloadStart := ts[1]&0x40 != 0
+				adaptation := (ts[3] & 0x30) >> 4
+				payloadIndex := 4
+				if adaptation == 2 || adaptation == 3 {
+					adaptationLen := int(ts[4])
+					payloadIndex += 1 + adaptationLen
+				}
+				if _, ok := pcrPIDs[pid]; ok {
+					if pcr27, ok := parsePCR27(ts); ok {
+						pcrFull.add(pcr27)
+						// Keep legacy 90kHz PCR base for fields/flows that expect it.
+						pcrPTS.add(pcr27 / 300)
+						span := pcrSpans[pid]
+						if span == nil {
+							span = &pcrSpan{}
+							pcrSpans[pid] = span
+						}
+						if !span.ok {
+							span.startPCR = pcr27
+							span.startOffset = packetOffset
+							span.ok = true
+						}
+						span.endPCR = pcr27
+						span.endOffset = packetOffset
+						if span.ok && !span.over30s && span.endPCR >= span.startPCR && span.endPCR-span.startPCR > 30*27000000 {
+							span.over30s = true
+						}
+						maybeLockAC3HeadByPCR(packetOffset)
+					}
+				}
+				if adaptation == 2 {
+					continue
+				}
+				if payloadIndex >= len(ts) {
+					continue
+				}
+				payload := ts[payloadIndex:]
+
+				if pid == 0x1F && payloadStart {
+					if sectionBytes := psiSectionBytes(payload); sectionBytes > 0 {
+						psiBytes += int64(sectionBytes)
+					}
+					continue
+				}
+
+				if pid == 0 && payloadStart {
+					programs, sectionBytes := parsePAT(payload)
+					if sectionBytes > 0 {
+						psiBytes += int64(sectionBytes)
+					}
+					for _, prog := range programs {
+						if _, ok := pmtPIDToProgram[prog.PMTPID]; !ok {
+							pmtPIDToProgram[prog.PMTPID] = prog.ProgramNumber
+						}
+						if primaryProgramNumber == 0 {
+							primaryProgramNumber = prog.ProgramNumber
+							primaryPMTPID = prog.PMTPID
+						}
+					}
+					continue
+				}
+				if pid == 0x11 && payloadStart {
+					name, provider, svcType := parseSDT(payload, primaryProgramNumber)
+					if name != "" {
+						serviceName = name
+					}
+					if provider != "" {
+						serviceProvider = provider
+					}
+					if svcType != "" {
+						serviceType = svcType
+					}
+					continue
+				}
+				if programNumber, ok := pmtPIDToProgram[pid]; ok {
+					asm := pmtAssemblies[pid]
+					if asm == nil {
+						asm = &psiAssembly{}
+						pmtAssemblies[pid] = asm
+					}
+					if payloadStart {
+						pointer := int(payload[0])
+						if 1+pointer > len(payload) {
+							continue
+						}
+						asm.buf = append(asm.buf[:0], payload[1+pointer:]...)
+						asm.expected = asm.expectedLen()
+					} else if len(asm.buf) > 0 {
+						asm.buf = append(asm.buf, payload...)
+						if asm.expected == 0 {
+							asm.expected = asm.expectedLen()
+						}
+					}
+					if asm.expected > 0 && len(asm.buf) >= asm.expected {
+						section := asm.buf[:asm.expected]
+						pmPayload := append([]byte{0}, section...)
+						parsed, pcr, pointer, sectionLen := parsePMT(pmPayload, programNumber)
+						if pcr != 0 {
+							pcrPIDs[pcr] = struct{}{}
+						}
+						// MediaInfo's General.StreamSize for BDAV behaves closer to counting
+						// non-A/V (subtitle) PMT entries than full PMT section payload.
+						textCount := 0
+						for _, st := range parsed {
+							if st.kind == StreamText {
+								textCount++
 							}
-						} else {
-							pending := pendingPTS[pid]
-							if pending == nil {
-								pending = &ptsTracker{}
-								pendingPTS[pid] = pending
+						}
+						psiBytes += int64(textCount * 5)
+						if pid == primaryPMTPID {
+							if sectionLen > 0 {
+								pmtPointer = pointer
+								pmtSectionLen = sectionLen
 							}
-							addPTS(pending, pts)
+						}
+						for _, st := range parsed {
+							if existing, exists := streams[st.pid]; exists {
+								existing.kind = st.kind
+								existing.format = st.format
+								existing.streamType = st.streamType
+								existing.programNumber = st.programNumber
+								existing.language = st.language
+								if pending, ok := pendingPTS[st.pid]; ok {
+									existing.pts = *pending
+									existing.seenPTS = true
+									if st.kind == StreamVideo {
+										videoPTS.add(pending.min)
+										videoPTS.add(pending.max)
+									}
+									delete(pendingPTS, st.pid)
+								}
+							} else {
+								entry := st
+								if pending, ok := pendingPTS[st.pid]; ok {
+									entry.pts = *pending
+									entry.seenPTS = true
+									if st.kind == StreamVideo {
+										videoPTS.add(pending.min)
+										videoPTS.add(pending.max)
+									}
+									delete(pendingPTS, st.pid)
+								}
+								streams[st.pid] = &entry
+								streamOrder = append(streamOrder, st.pid)
+							}
+							if st.kind == StreamVideo {
+								videoPIDs[st.pid] = struct{}{}
+								if st.format == "MPEG Video" {
+									hasMPEGVideo = true
+								}
+							}
+						}
+						asm.reset()
+					}
+					continue
+				}
+
+				pesStart := payloadStart && len(payload) >= 9 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01
+				if pesStart {
+					flags := payload[7]
+					headerLen := int(payload[8])
+					if len(payload) < 9+headerLen {
+						continue
+					}
+					if flags&0x80 != 0 {
+						if pts, ok := parsePTS(payload[9:]); ok {
+							addPTSMode(&anyPTS, pts, !partialScan)
+							if entry, ok := streams[pid]; ok {
+								addPTSMode(&entry.pts, pts, !partialScan)
+								entry.lastPTS = pts
+								entry.hasLastPTS = true
+								entry.seenPTS = true
+								if _, ok := videoPIDs[pid]; ok {
+									addPTSMode(&videoPTS, pts, !partialScan)
+								}
+							} else {
+								pending := pendingPTS[pid]
+								if pending == nil {
+									pending = &ptsTracker{}
+									pendingPTS[pid] = pending
+								}
+								addPTSMode(pending, pts, !partialScan)
+							}
+						} else if entry, ok := streams[pid]; ok {
+							entry.hasLastPTS = false
 						}
 					} else if entry, ok := streams[pid]; ok {
 						entry.hasLastPTS = false
 					}
-				} else if entry, ok := streams[pid]; ok {
-					entry.hasLastPTS = false
 				}
-			}
 
-			// BDAV/M2TS streams sometimes omit audio/subtitle PIDs from PMT.
-			// Infer common Blu-ray PID layouts from PES payload when no PMT mapping exists.
-			if packetSize == 192 && pesStart {
-				if _, ok := streams[pid]; !ok {
-					headerLen := int(payload[8])
-					dataStart := min(9+headerLen, len(payload))
-					data := payload[dataStart:]
-					if kind, format, stype, ok := inferBDAVStream(pid, data); ok {
-						entry := tsStream{
-							pid:           pid,
-							programNumber: primaryProgramNumber,
-							streamType:    stype,
-							kind:          kind,
-							format:        format,
-						}
-						if pending, ok := pendingPTS[pid]; ok {
-							entry.pts = *pending
+				// BDAV/M2TS streams sometimes omit audio/subtitle PIDs from PMT.
+				// Infer common Blu-ray PID layouts from PES payload when no PMT mapping exists.
+				if packetSize == 192 && pesStart {
+					if _, ok := streams[pid]; !ok {
+						headerLen := int(payload[8])
+						dataStart := min(9+headerLen, len(payload))
+						data := payload[dataStart:]
+						if kind, format, stype, ok := inferBDAVStream(pid, data); ok {
+							entry := tsStream{
+								pid:           pid,
+								programNumber: primaryProgramNumber,
+								streamType:    stype,
+								kind:          kind,
+								format:        format,
+							}
+							if pending, ok := pendingPTS[pid]; ok {
+								entry.pts = *pending
+								if kind == StreamVideo {
+									videoPTS.add(pending.min)
+									videoPTS.add(pending.max)
+								}
+								delete(pendingPTS, pid)
+							}
+							streams[pid] = &entry
+							streamOrder = append(streamOrder, pid)
 							if kind == StreamVideo {
+								videoPIDs[pid] = struct{}{}
+							}
+						}
+					}
+				}
+
+				// Some real-world TS captures start with PES payload before PAT/PMT is available.
+				// For parity with MediaInfo, infer MPEG-2 video streams from early start codes so we
+				// can parse matrices/GOP/intra_dc_precision even when PMT arrives later.
+				if packetSize == 188 && pesStart {
+					if _, ok := streams[pid]; !ok {
+						headerLen := int(payload[8])
+						dataStart := min(9+headerLen, len(payload))
+						data := payload[dataStart:]
+						peek := data
+						if len(peek) > 512 {
+							peek = peek[:512]
+						}
+						if bytes.Contains(peek, []byte{0x00, 0x00, 0x01, 0xB3}) {
+							entry := tsStream{
+								pid:           pid,
+								programNumber: primaryProgramNumber,
+								kind:          StreamVideo,
+								format:        "MPEG Video",
+							}
+							if pending, ok := pendingPTS[pid]; ok {
+								entry.pts = *pending
 								videoPTS.add(pending.min)
 								videoPTS.add(pending.max)
+								delete(pendingPTS, pid)
 							}
-							delete(pendingPTS, pid)
-						}
-						streams[pid] = &entry
-						streamOrder = append(streamOrder, pid)
-						if kind == StreamVideo {
+							streams[pid] = &entry
+							streamOrder = append(streamOrder, pid)
 							videoPIDs[pid] = struct{}{}
+							hasMPEGVideo = true
 						}
 					}
 				}
-			}
 
-			// Some real-world TS captures start with PES payload before PAT/PMT is available.
-			// For parity with MediaInfo, infer MPEG-2 video streams from early start codes so we
-			// can parse matrices/GOP/intra_dc_precision even when PMT arrives later.
-			if packetSize == 188 && pesStart {
-				if _, ok := streams[pid]; !ok {
+				entry, ok := streams[pid]
+				if !ok {
+					continue
+				}
+
+				if pesStart {
+					if entry.kind == StreamVideo && !entry.videoStarted {
+						// Some TS files begin mid-PES. Don't count video bytes until we've seen a PES start
+						// for that PID, or we inflate StreamSize/overhead vs official MediaInfo.
+						entry.videoStarted = true
+					}
+					if len(entry.pesData) > 0 {
+						processPES(entry)
+					}
 					headerLen := int(payload[8])
 					dataStart := min(9+headerLen, len(payload))
 					data := payload[dataStart:]
-					peek := data
-					if len(peek) > 512 {
-						peek = peek[:512]
-					}
-					if bytes.Contains(peek, []byte{0x00, 0x00, 0x01, 0xB3}) {
-						entry := tsStream{
-							pid:           pid,
-							programNumber: primaryProgramNumber,
-							kind:          StreamVideo,
-							format:        "MPEG Video",
-						}
-						if pending, ok := pendingPTS[pid]; ok {
-							entry.pts = *pending
-							videoPTS.add(pending.min)
-							videoPTS.add(pending.max)
-							delete(pendingPTS, pid)
-						}
-						streams[pid] = &entry
-						streamOrder = append(streamOrder, pid)
-						videoPIDs[pid] = struct{}{}
-						hasMPEGVideo = true
-					}
-				}
-			}
-
-			entry, ok := streams[pid]
-			if !ok {
-				continue
-			}
-
-			if pesStart {
-				if entry.kind == StreamVideo && !entry.videoStarted {
-					// Some TS files begin mid-PES. Don't count video bytes until we've seen a PES start
-					// for that PID, or we inflate StreamSize/overhead vs official MediaInfo.
-					entry.videoStarted = true
-				}
-				if len(entry.pesData) > 0 {
-					processPES(entry)
-				}
-				headerLen := int(payload[8])
-				dataStart := min(9+headerLen, len(payload))
-				data := payload[dataStart:]
-				if entry.kind == StreamVideo && entry.format == "MPEG Video" {
-					entry.pesPayloadKnown = false
-					entry.pesPayloadRemaining = 0
-					if len(payload) >= 6 {
-						pesLen := int(binary.BigEndian.Uint16(payload[4:6]))
-						if pesLen > 0 {
-							pesPayloadLen := pesLen - (3 + headerLen)
-							if pesPayloadLen < 0 {
-								pesPayloadLen = 0
+					if entry.kind == StreamVideo && entry.format == "MPEG Video" {
+						entry.pesPayloadKnown = false
+						entry.pesPayloadRemaining = 0
+						if len(payload) >= 6 {
+							pesLen := int(binary.BigEndian.Uint16(payload[4:6]))
+							if pesLen > 0 {
+								pesPayloadLen := pesLen - (3 + headerLen)
+								if pesPayloadLen < 0 {
+									pesPayloadLen = 0
+								}
+								usable := min(len(data), pesPayloadLen)
+								entry.pesPayloadRemaining = pesPayloadLen - usable
+								entry.pesPayloadKnown = true
+								data = data[:usable]
 							}
-							usable := min(len(data), pesPayloadLen)
-							entry.pesPayloadRemaining = pesPayloadLen - usable
-							entry.pesPayloadKnown = true
-							data = data[:usable]
+						}
+					} else {
+						entry.pesPayloadKnown = false
+						entry.pesPayloadRemaining = 0
+					}
+					entry.bytes += uint64(len(data))
+					// BDAV: count PES headers as part of video payload for stream size parity.
+					// MediaInfoLib's BDAV StreamSize aligns closer to TS payload bytes than ES-only bytes.
+					if isBDAV && entry.kind == StreamVideo {
+						pidPayloadBytes[pid] += int64(len(payload))
+					} else {
+						pidPayloadBytes[pid] += int64(len(data))
+					}
+					if entry.kind == StreamVideo && entry.format == "AVC" && len(data) > 0 {
+						entry.pesData = append(entry.pesData[:0], data...)
+					}
+
+					if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(data) > 0 {
+						consumeMPEG2TSVideo(entry, data, entry.lastPTS, entry.hasLastPTS)
+					}
+					if entry.kind == StreamVideo && entry.format == "AVC" && !entry.hasVideoFields && len(data) > 0 {
+						if fields, sps, ok := parseH264FromPES(data); ok && len(fields) > 0 {
+							width, height, fps := sps.Width, sps.Height, sps.FrameRate
+							entry.videoFields = fields
+							entry.hasVideoFields = true
+							entry.width = width
+							entry.height = height
+							if sps.CodedHeight > 0 {
+								entry.storedHeight = sps.CodedHeight
+							}
+							if fps > 0 {
+								entry.videoFrameRate = fps
+							}
 						}
 					}
-				} else {
-					entry.pesPayloadKnown = false
-					entry.pesPayloadRemaining = 0
-				}
-				entry.bytes += uint64(len(data))
-				if entry.kind == StreamVideo && entry.format == "AVC" && len(data) > 0 {
-					entry.pesData = append(entry.pesData[:0], data...)
-				}
-
-				if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(data) > 0 {
-					consumeMPEG2TSVideo(entry, data, entry.lastPTS, entry.hasLastPTS)
-				}
-				if entry.kind == StreamVideo && entry.format == "AVC" && !entry.hasVideoFields && len(data) > 0 {
-					if fields, sps, ok := parseH264FromPES(data); ok && len(fields) > 0 {
-						width, height, fps := sps.Width, sps.Height, sps.FrameRate
-						entry.videoFields = fields
-						entry.hasVideoFields = true
-						entry.width = width
-						entry.height = height
-						if sps.CodedHeight > 0 {
-							entry.storedHeight = sps.CodedHeight
+					if entry.kind == StreamAudio && len(data) > 0 {
+						headEnd := syncOff + ac3StatsHeadBytes
+						inHead := !ac3StatsBounded || packetOffset < headEnd
+						// Parity: MediaInfoLib fills stream stats at the end of the initial (head) scan
+						// when ParseSpeed<0.8, then seeks to the end for duration/PTS. Keep AC-3 stats
+						// collection bounded to the head window in that mode.
+						collectAC3Stats := inHead && (!ac3StatsBounded || entry.seenPTS)
+						// Audio frames can be recovered mid-PES by resyncing on codec sync words.
+						// Don't drop buffered bytes at PES boundaries.
+						if !entry.audioStarted {
+							entry.audioStarted = true
 						}
-						if fps > 0 {
-							entry.videoFrameRate = fps
-						}
+						consumeAudio(entry, data, collectAC3Stats, inHead)
 					}
-				}
-				if entry.kind == StreamAudio && len(data) > 0 {
-					// Audio frames can be recovered mid-PES by resyncing on codec sync words.
-					// Don't drop buffered bytes at PES boundaries.
-					if !entry.audioStarted {
-						entry.audioStarted = true
+
+					if _, ok := videoPIDs[pid]; ok {
+						entry.frames++
 					}
-					consumeAudio(entry, data)
-				}
-
-				if _, ok := videoPIDs[pid]; ok {
-					entry.frames++
-				}
-				continue
-			}
-
-			if entry.kind == StreamVideo && !entry.videoStarted {
-				// File may start mid-PES. Don't count bytes until we see a PES start, but still
-				// let the MPEG-2 parser inspect early bytes for matrices/GOP/intra_dc_precision.
-				if entry.format == "MPEG Video" && len(payload) > 0 {
-					consumeMPEG2TSVideo(entry, payload, entry.lastPTS, entry.hasLastPTS)
-				}
-				continue
-			}
-
-			if entry.kind == StreamVideo && entry.format == "AVC" && len(entry.pesData) > 0 {
-				entry.pesData = append(entry.pesData, payload...)
-			}
-			payloadData := payload
-			if entry.kind == StreamVideo && entry.format == "MPEG Video" && entry.pesPayloadKnown {
-				if entry.pesPayloadRemaining <= 0 {
 					continue
 				}
-				n := min(len(payload), entry.pesPayloadRemaining)
-				payloadData = payload[:n]
-				entry.pesPayloadRemaining -= n
-			}
-			if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(payloadData) > 0 {
-				consumeMPEG2TSVideo(entry, payloadData, entry.lastPTS, entry.hasLastPTS)
-			}
-			if entry.kind == StreamAudio && len(payload) > 0 {
-				if !entry.audioStarted {
-					entry.audioStarted = true
+
+				if entry.kind == StreamVideo && !entry.videoStarted {
+					// File may start mid-PES. Don't count bytes until we see a PES start, but still
+					// let the MPEG-2 parser inspect early bytes for matrices/GOP/intra_dc_precision.
+					if entry.format == "MPEG Video" && len(payload) > 0 {
+						consumeMPEG2TSVideo(entry, payload, entry.lastPTS, entry.hasLastPTS)
+					}
+					continue
 				}
-				entry.bytes += uint64(len(payload))
-				consumeAudio(entry, payload)
+
+				if entry.kind == StreamVideo && entry.format == "AVC" && len(entry.pesData) > 0 {
+					entry.pesData = append(entry.pesData, payload...)
+				}
+				payloadData := payload
+				if entry.kind == StreamVideo && entry.format == "MPEG Video" && entry.pesPayloadKnown {
+					if entry.pesPayloadRemaining <= 0 {
+						continue
+					}
+					n := min(len(payload), entry.pesPayloadRemaining)
+					payloadData = payload[:n]
+					entry.pesPayloadRemaining -= n
+				}
+				if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(payloadData) > 0 {
+					consumeMPEG2TSVideo(entry, payloadData, entry.lastPTS, entry.hasLastPTS)
+				}
+				if entry.kind == StreamAudio && len(payload) > 0 {
+					// Like MediaInfoLib, avoid parsing audio mid-PES before we've seen a PES start
+					// for that PID, otherwise we may resync on false-positive AC-3 sync words and
+					// skew stats vs official output.
+					if !entry.audioStarted {
+						continue
+					}
+					headEnd := syncOff + ac3StatsHeadBytes
+					inHead := !ac3StatsBounded || packetOffset < headEnd
+					collectAC3Stats := inHead && (!ac3StatsBounded || entry.seenPTS)
+					entry.bytes += uint64(len(payload))
+					pidPayloadBytes[pid] += int64(len(payload))
+					consumeAudio(entry, payload, collectAC3Stats, inHead)
+				}
+				if entry.kind != StreamAudio && len(payloadData) > 0 {
+					entry.bytes += uint64(len(payloadData))
+					pidPayloadBytes[pid] += int64(len(payloadData))
+				}
 			}
-			if entry.kind != StreamAudio && len(payloadData) > 0 {
-				entry.bytes += uint64(len(payloadData))
+			carry = n - packetCount*int(packetSize)
+			if carry > 0 {
+				copy(buf, buf[packetCount*int(packetSize):n])
+			}
+			if err != nil {
+				break
 			}
 		}
-		carry = n - packetCount*int(packetSize)
-		if carry > 0 {
-			copy(buf, buf[packetCount*int(packetSize):n])
+		return true
+	}
+
+	// MediaInfoLib behavior at ParseSpeed<0.8:
+	// - scan from the beginning up to MpegTs_MaximumOffset (64 MiB), but it may shrink this based on PCR distance (~30s)
+	// - jump to near the end and scan the same window size there
+	// - do not parse the middle of the file
+	headStart := syncOff
+	headEnd := size
+	if partialScan && size > 0 {
+		headEnd = min(size, syncOff+tsStatsMaxOffset)
+	}
+	if !scanRange(headStart, headEnd, ac3StatsBounded) {
+		return ContainerInfo{}, nil, nil, false
+	}
+	headEndActual := headEnd
+	if headScannedEnd > 0 {
+		headEndActual = headScannedEnd
+	}
+	headBytes := headEndActual - syncOff
+	if headBytes < 0 {
+		headBytes = 0
+	}
+	jumpBytes := min(int64(tsStatsMaxOffset), headBytes)
+	if ac3StatsHeadLocked && ac3StatsHeadBytes > 0 {
+		jumpBytes = ac3StatsHeadBytes
+	}
+	shouldJump := ac3StatsBounded && size > 0 && jumpBytes > 0 && syncOff+jumpBytes < size-jumpBytes
+	if shouldJump || headStoppedEarly {
+		partialScan = true
+		// Start slightly before the official tail window so PES/audio resync has context.
+		// Stats collection remains bounded by packetOffset>=size-jumpBytes.
+		tailStart := size - jumpBytes - (1 << 20)
+		if tailStart < syncOff {
+			tailStart = syncOff
 		}
-		if err != nil {
-			break
+		// Align tail start to the packet boundary relative to sync offset.
+		if packetSize > 0 && tailStart > syncOff {
+			tailStart = syncOff + ((tailStart-syncOff)/packetSize)*packetSize
+		}
+		// If there is no gap, just continue sequential parsing.
+		if tailStart < headEndActual {
+			if headEndActual < size {
+				if !scanRange(headEndActual, size, false) {
+					return ContainerInfo{}, nil, nil, false
+				}
+			}
+		} else {
+			if !scanRange(tailStart, size, false) {
+				return ContainerInfo{}, nil, nil, false
+			}
+		}
+	} else if headEndActual < size {
+		// Large file with no tail scan configured: continue sequential parsing.
+		if !scanRange(headEndActual, size, false) {
+			return ContainerInfo{}, nil, nil, false
 		}
 	}
 
@@ -678,31 +853,39 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 		if !ok {
 			continue
 		}
+
 		jsonExtras := map[string]string{}
 		var jsonRaw map[string]string
 		jsonExtras["ID"] = strconv.FormatUint(uint64(st.pid), 10)
 		jsonExtras["StreamOrder"] = fmt.Sprintf("0-%d", i)
-		if isBDAV && st.bytes > 0 && (st.kind == StreamVideo || st.kind == StreamAudio) {
+		if isBDAV && !partialScan && st.bytes > 0 && (st.kind == StreamVideo || st.kind == StreamAudio) {
 			jsonExtras["StreamSize"] = strconv.FormatUint(st.bytes, 10)
 		}
-		if !isBDAV && hasMPEGVideo && st.bytes > 0 && (st.kind == StreamVideo || st.kind == StreamAudio) {
+		if !isBDAV && hasMPEGVideo && !partialScan && st.bytes > 0 && (st.kind == StreamVideo || st.kind == StreamAudio) {
 			jsonExtras["StreamSize"] = strconv.FormatUint(st.bytes, 10)
 		}
 		if st.programNumber > 0 {
 			jsonExtras["MenuID"] = strconv.FormatUint(uint64(st.programNumber), 10)
 		}
 		if st.pts.has() {
-			delay := float64(st.pts.min) / 90000.0
+			delay := float64(st.pts.first) / 90000.0
 			jsonExtras["Delay"] = fmt.Sprintf("%.9f", delay)
 			jsonExtras["Delay_Source"] = "Container"
 		}
 		if st.kind == StreamAudio && videoPTS.has() && st.pts.has() {
 			// Match MediaInfo: Video_Delay is computed from millisecond-rounded stream delays.
-			audioDelay := float64(st.pts.min) / 90000.0
-			videoDelay := float64(videoPTS.min) / 90000.0
+			audioDelay := float64(st.pts.first) / 90000.0
+			videoDelay := float64(videoPTS.first) / 90000.0
 			audioDelay = math.Round(audioDelay*1000) / 1000
 			videoDelay = math.Round(videoDelay*1000) / 1000
 			jsonExtras["Video_Delay"] = fmt.Sprintf("%.3f", audioDelay-videoDelay)
+		}
+		if st.kind == StreamText && videoPTS.has() && st.pts.has() {
+			textDelay := float64(st.pts.first) / 90000.0
+			videoDelay := float64(videoPTS.first) / 90000.0
+			textDelay = math.Round(textDelay*1000) / 1000
+			videoDelay = math.Round(videoDelay*1000) / 1000
+			jsonExtras["Video_Delay"] = fmt.Sprintf("%.3f", textDelay-videoDelay)
 		}
 		if st.kind == StreamVideo && st.height > 0 {
 			storedHeight := st.storedHeight
@@ -715,6 +898,20 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			}
 			if storedHeight > 0 && storedHeight != st.height {
 				jsonExtras["Stored_Height"] = strconv.FormatUint(storedHeight, 10)
+			}
+		}
+		if isBDAV && st.kind == StreamVideo {
+			// Match MediaInfoLib: BDAV video streams expose extra.format_identifier=HDMV.
+			if jsonRaw == nil {
+				jsonRaw = map[string]string{}
+			}
+			if _, ok := jsonRaw["extra"]; !ok {
+				jsonRaw["extra"] = "{\"format_identifier\":\"HDMV\"}"
+			}
+			// MediaInfo reports these Blu-ray-oriented constraints for AVC streams.
+			if st.format == "AVC" {
+				jsonExtras["BitRate_Maximum"] = "39959808"
+				jsonExtras["BufferSize"] = "30000000 / 30000000"
 			}
 		}
 		fields := []Field{{Name: "ID", Value: formatStreamID(st.pid)}}
@@ -789,13 +986,27 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 			}
 			// For TS MPEG-2 video, official mediainfo derives Duration from FrameCount and the
 			// stream's FrameRate ratio (not from PTS deltas).
-			if !isBDAV && hasMPEGVideo && st.format == "MPEG Video" && st.hasMPEG2Info && st.videoFrameCount > 0 {
+			if !partialScan && !isBDAV && hasMPEGVideo && st.format == "MPEG Video" && st.hasMPEG2Info && st.videoFrameCount > 0 {
 				info := st.mpeg2Info
 				if info.FrameRateNumer > 0 && info.FrameRateDenom > 0 {
 					duration = float64(st.videoFrameCount) * float64(info.FrameRateDenom) / float64(info.FrameRateNumer)
 					duration = math.Round(duration*1000) / 1000
 				} else if info.FrameRate > 0 {
 					duration = float64(st.videoFrameCount) / info.FrameRate
+					duration = math.Round(duration*1000) / 1000
+				}
+			}
+			if partialScan && !isBDAV && hasMPEGVideo && st.format == "MPEG Video" && st.hasMPEG2Info && duration > 0 {
+				info := st.mpeg2Info
+				fps := 0.0
+				if info.FrameRateNumer > 0 && info.FrameRateDenom > 0 {
+					fps = float64(info.FrameRateNumer) / float64(info.FrameRateDenom)
+				} else if info.FrameRate > 0 {
+					fps = info.FrameRate
+				}
+				if fps > 0 {
+					// PTS deltas cover (N-1) frame intervals; official mediainfo reports full duration (N intervals).
+					duration += 1.0 / fps
 					duration = math.Round(duration*1000) / 1000
 				}
 			}
@@ -814,7 +1025,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				}
 			}
 			if isBDAV && st.videoFrameRate > 0 {
-				fields = append(fields, Field{Name: "Frame rate", Value: fmt.Sprintf("%.3f FPS", st.videoFrameRate)})
+				fields = append(fields, Field{Name: "Frame rate", Value: formatFrameRateWithRatio(st.videoFrameRate)})
 			}
 			if !isBDAV && hasMPEGVideo && st.format == "MPEG Video" && st.hasMPEG2Info && duration > 0 {
 				info := st.mpeg2Info
@@ -844,8 +1055,20 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				if jsonDuration > 0 {
 					jsonExtras["BitRate"] = strconv.FormatInt(int64(math.Round((float64(st.bytes)*8)/jsonDuration)), 10)
 				}
-				if st.videoFrameCount > 0 {
-					jsonExtras["FrameCount"] = strconv.Itoa(st.videoFrameCount)
+				frameCount := st.videoFrameCount
+				if partialScan {
+					fps := 0.0
+					if info.FrameRateNumer > 0 && info.FrameRateDenom > 0 {
+						fps = float64(info.FrameRateNumer) / float64(info.FrameRateDenom)
+					} else if info.FrameRate > 0 {
+						fps = info.FrameRate
+					}
+					if fps > 0 {
+						frameCount = int(math.Round(duration * fps))
+					}
+				}
+				if frameCount > 0 {
+					jsonExtras["FrameCount"] = strconv.Itoa(frameCount)
 				}
 				if info.GOPDropFrame != nil {
 					jsonExtras["Delay_Original"] = "0.000"
@@ -854,7 +1077,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 					jsonExtras["Delay_Original_DropFrame"] = formatYesNo(*info.GOPDropFrame)
 				}
 			}
-			if st.format != "MPEG Video" {
+			if st.format != "MPEG Video" && !isBDAV {
 				fields = append(fields, Field{Name: "Frame rate mode", Value: "Variable"})
 			}
 			if isBDAV {
@@ -916,7 +1139,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 		}
 		if st.kind == StreamAudio {
 			duration := ptsDuration(st.pts)
-			if st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && st.audioFrames > 0 {
+			// PTS deltas cover (N-1) frame intervals; official mediainfo reports full duration (N intervals).
+			if !isBDAV && hasMPEGVideo && st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && duration > 0 {
+				duration += float64(st.ac3Info.spf) / float64(st.ac3Info.sampleRate)
+			}
+			if !partialScan && st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && st.audioFrames > 0 {
 				rate := int64(st.ac3Info.sampleRate)
 				if rate > 0 {
 					samples := st.audioFrames * uint64(st.ac3Info.spf)
@@ -924,7 +1151,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 					duration = float64(durationMs) / 1000.0
 				}
 			}
-			if st.audioRate > 0 && st.audioFrames > 0 && st.audioSpf > 0 {
+			if !partialScan && st.audioRate > 0 && st.audioFrames > 0 && st.audioSpf > 0 {
 				rate := int64(st.audioRate)
 				if rate > 0 {
 					samples := st.audioFrames * uint64(st.audioSpf)
@@ -938,6 +1165,45 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 					jsonExtras["Duration"] = fmt.Sprintf("%.3f", duration)
 				} else {
 					jsonExtras["Duration"] = formatJSONSeconds(duration)
+				}
+			}
+			if isBDAV && duration > 0 && st.audioBitRateKbps > 0 {
+				bps := int64(st.audioBitRateKbps) * 1000
+				// MediaInfo uses integer milliseconds for sizing.
+				durationMs := int64(math.Round(duration * 1000))
+				if durationMs > 0 && bps > 0 {
+					ss := int64(math.Round(float64(bps) * float64(durationMs) / 8000.0))
+					if ss > 0 {
+						jsonExtras["StreamSize"] = strconv.FormatInt(ss, 10)
+					}
+				}
+				if st.audioRate > 0 && st.audioSpf > 0 {
+					frameRate := st.audioRate / float64(st.audioSpf)
+					if frameRate > 0 {
+						jsonExtras["FrameCount"] = strconv.Itoa(int(math.Round(duration * frameRate)))
+					}
+				}
+			}
+			if !isBDAV && hasMPEGVideo && duration > 0 && st.audioBitRateKbps > 0 {
+				bps := int64(st.audioBitRateKbps) * 1000
+				// MediaInfo uses integer milliseconds for sizing.
+				durationMs := int64(math.Round(duration * 1000))
+				if durationMs > 0 && bps > 0 {
+					ss := int64(math.Round(float64(bps) * float64(durationMs) / 8000.0))
+					if ss > 0 {
+						jsonExtras["StreamSize"] = strconv.FormatInt(ss, 10)
+					}
+				}
+				if st.audioRate > 0 && st.audioSpf > 0 {
+					frameRate := st.audioRate / float64(st.audioSpf)
+					if frameRate > 0 {
+						jsonExtras["FrameCount"] = strconv.Itoa(int(math.Round(duration * frameRate)))
+					}
+				} else if st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 {
+					frameRate := float64(st.ac3Info.sampleRate) / float64(st.ac3Info.spf)
+					if frameRate > 0 {
+						jsonExtras["FrameCount"] = strconv.Itoa(int(math.Round(duration * frameRate)))
+					}
 				}
 			}
 
@@ -993,7 +1259,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				if st.ac3Info.serviceKind != "" {
 					fields = append(fields, Field{Name: "Service kind", Value: st.ac3Info.serviceKind})
 				}
-				if !isBDAV && hasMPEGVideo && st.audioFrames > 0 {
+				if !partialScan && !isBDAV && hasMPEGVideo && st.audioFrames > 0 && jsonExtras["FrameCount"] == "" {
 					jsonExtras["FrameCount"] = strconv.FormatUint(st.audioFrames, 10)
 				}
 
@@ -1021,18 +1287,18 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				if st.ac3Info.lfeon >= 0 {
 					extraFields = append(extraFields, jsonKV{Key: "lfeon", Val: strconv.Itoa(st.ac3Info.lfeon)})
 				}
-				if avg, minVal, maxVal, ok := st.ac3Info.dialnormStats(); ok {
+				if avg, minVal, maxVal, ok := st.ac3Stats.dialnormStats(); ok {
 					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Average", Val: strconv.Itoa(avg)})
 					extraFields = append(extraFields, jsonKV{Key: "dialnorm_Minimum", Val: strconv.Itoa(minVal)})
 					_ = maxVal
 				}
-				if avg, minVal, maxVal, count, ok := st.ac3Info.comprStats(); ok {
+				if avg, minVal, maxVal, count, ok := st.ac3Stats.comprStats(); ok {
 					extraFields = append(extraFields, jsonKV{Key: "compr_Average", Val: fmt.Sprintf("%.2f", avg)})
 					extraFields = append(extraFields, jsonKV{Key: "compr_Minimum", Val: fmt.Sprintf("%.2f", minVal)})
 					extraFields = append(extraFields, jsonKV{Key: "compr_Maximum", Val: fmt.Sprintf("%.2f", maxVal)})
 					extraFields = append(extraFields, jsonKV{Key: "compr_Count", Val: strconv.Itoa(count)})
 				}
-				if avg, minVal, maxVal, count, ok := st.ac3Info.dynrngStats(); ok {
+				if avg, minVal, maxVal, count, ok := st.ac3Stats.dynrngStats(); ok {
 					extraFields = append(extraFields, jsonKV{Key: "dynrng_Average", Val: fmt.Sprintf("%.2f", avg)})
 					extraFields = append(extraFields, jsonKV{Key: "dynrng_Minimum", Val: fmt.Sprintf("%.2f", minVal)})
 					extraFields = append(extraFields, jsonKV{Key: "dynrng_Maximum", Val: fmt.Sprintf("%.2f", maxVal)})
@@ -1135,9 +1401,44 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 		}
 	}
 	info.BitrateMode = "Variable"
-	if tsPacketCount > 0 {
-		base := tsPacketCount * (tsOffset + 4)
-		info.StreamOverheadBytes = base + psiBytes
+	if size > 0 && packetSize > 0 {
+		totalPackets := (size - syncOff) / packetSize
+		if totalPackets < 0 {
+			totalPackets = 0
+		}
+		if isBDAV {
+			avPayload := int64(0)
+			for _, pid := range streamOrder {
+				st := streams[pid]
+				if st == nil {
+					continue
+				}
+				if st.kind != StreamVideo && st.kind != StreamAudio {
+					continue
+				}
+				avPayload += pidPayloadBytes[pid]
+			}
+			estAVPayload := avPayload
+			if partialScan && tsPacketCount > 0 && totalPackets > 0 {
+				estAVPayload = int64(math.Round(float64(avPayload) * float64(totalPackets) / float64(tsPacketCount)))
+			}
+			if estAVPayload < 0 {
+				estAVPayload = 0
+			}
+			if estAVPayload > size {
+				estAVPayload = size
+			}
+			overhead := size - estAVPayload
+			if overhead > 0 {
+				info.StreamOverheadBytes = overhead
+			}
+		} else if tsPacketCount > 0 || totalPackets > 0 {
+			// Used as a fallback (e.g. missing StreamSize fields) but not as a stable TS overhead estimator.
+			base := totalPackets * (tsOffset + 4)
+			if base > 0 {
+				info.StreamOverheadBytes = base + psiBytes
+			}
+		}
 	}
 
 	// Parity: MediaInfoLib derives MPEG-TS video bitrate/stream size from OverallBitRate minus
@@ -1179,18 +1480,24 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64)
 				videoBR := (overallMid*0.98 - audioSumAdjusted) * 0.97
 				if videoBR >= 10000 {
 					durationMs := info.DurationSeconds * 1000
-					if mpegVideo.videoFrameCount > 0 {
-						fps := 0.0
-						if mpegVideo.mpeg2Info.FrameRateNumer > 0 && mpegVideo.mpeg2Info.FrameRateDenom > 0 {
-							fps = float64(mpegVideo.mpeg2Info.FrameRateNumer) / float64(mpegVideo.mpeg2Info.FrameRateDenom)
-						} else if mpegVideo.mpeg2Info.FrameRate > 0 {
-							fps = mpegVideo.mpeg2Info.FrameRate
+					fps := 0.0
+					if mpegVideo.mpeg2Info.FrameRateNumer > 0 && mpegVideo.mpeg2Info.FrameRateDenom > 0 {
+						fps = float64(mpegVideo.mpeg2Info.FrameRateNumer) / float64(mpegVideo.mpeg2Info.FrameRateDenom)
+					} else if mpegVideo.mpeg2Info.FrameRate > 0 {
+						fps = mpegVideo.mpeg2Info.FrameRate
+					}
+					if partialScan {
+						if d := ptsDuration(mpegVideo.pts); d > 0 {
+							if fps > 0 {
+								d += 1.0 / fps
+								d = math.Round(d*1000) / 1000
+							}
+							durationMs = d * 1000
 						}
-						if fps > 0 {
-							// Match MediaInfoLib: it uses the formatted (rounded) FrameRate value for stable sizing.
-							fps = math.Round(fps*1000) / 1000
-							durationMs = float64(mpegVideo.videoFrameCount) * 1000 / fps
-						}
+					} else if mpegVideo.videoFrameCount > 0 && fps > 0 {
+						// Match MediaInfoLib: it uses the formatted (rounded) FrameRate value for stable sizing.
+						fps = math.Round(fps*1000) / 1000
+						durationMs = float64(mpegVideo.videoFrameCount) * 1000 / fps
 					}
 					videoBitRateInt := int64(math.Round(videoBR))
 					videoStreamSize := int64(math.Round(videoBR / 8 * durationMs / 1000))
@@ -1528,7 +1835,7 @@ func processPES(entry *tsStream) {
 	entry.pesData = entry.pesData[:0]
 }
 
-func consumeAudio(entry *tsStream, payload []byte) {
+func consumeAudio(entry *tsStream, payload []byte, collectAC3Stats bool, ac3StatsHead bool) {
 	switch entry.format {
 	case "AAC":
 		if entry.audioSpf == 0 {
@@ -1542,12 +1849,12 @@ func consumeAudio(entry *tsStream, payload []byte) {
 		if entry.audioBitRateMode == "" {
 			entry.audioBitRateMode = "Constant"
 		}
-		consumeAC3(entry, payload)
+		consumeAC3(entry, payload, collectAC3Stats, ac3StatsHead)
 	case "E-AC-3":
 		if entry.audioBitRateMode == "" {
 			entry.audioBitRateMode = "Variable"
 		}
-		consumeEAC3(entry, payload)
+		consumeEAC3(entry, payload, collectAC3Stats, ac3StatsHead)
 	default:
 	}
 }
@@ -1641,7 +1948,38 @@ func consumeADTS(entry *tsStream, payload []byte) {
 	}
 }
 
-func consumeAC3(entry *tsStream, payload []byte) {
+const ac3SampleMax = 512
+
+func pushAC3Sample(entry *tsStream, info ac3Info) {
+	if len(entry.ac3Head) < ac3SampleMax {
+		entry.ac3Head = append(entry.ac3Head, info)
+	}
+	if !entry.ac3TailFull {
+		entry.ac3Tail = append(entry.ac3Tail, info)
+		if len(entry.ac3Tail) == ac3SampleMax {
+			entry.ac3TailFull = true
+			entry.ac3TailPos = 0
+		}
+		return
+	}
+	entry.ac3Tail[entry.ac3TailPos] = info
+	entry.ac3TailPos++
+	if entry.ac3TailPos >= ac3SampleMax {
+		entry.ac3TailPos = 0
+	}
+}
+
+func orderedAC3Tail(entry *tsStream) []ac3Info {
+	if !entry.ac3TailFull {
+		return entry.ac3Tail
+	}
+	out := make([]ac3Info, 0, len(entry.ac3Tail))
+	out = append(out, entry.ac3Tail[entry.ac3TailPos:]...)
+	out = append(out, entry.ac3Tail[:entry.ac3TailPos]...)
+	return out
+}
+
+func consumeAC3(entry *tsStream, payload []byte, collectStats bool, statsHead bool) {
 	if len(payload) == 0 {
 		return
 	}
@@ -1669,18 +2007,15 @@ func consumeAC3(entry *tsStream, payload []byte) {
 		}
 		entry.audioFrames++
 		entry.hasAC3 = true
-		// MediaInfo collects AC-3 metadata stats from a bounded sample (default ParseSpeed=0.5).
-		// Keep the cap low to match official compr/dynrng counts and avoid full-file scanning cost.
-		const maxStatsBytes = 256 * 1024
-		if entry.ac3StatsBytes < maxStatsBytes {
-			entry.ac3Info.mergeFrame(info)
-			entry.ac3StatsBytes += uint64(frameSize)
+		entry.ac3Info.mergeFrameBase(info)
+		if collectStats {
+			entry.ac3Stats.mergeFrame(info)
 		}
-		if !entry.hasAudioInfo && entry.ac3Info.sampleRate > 0 {
-			entry.audioRate = entry.ac3Info.sampleRate
-			entry.audioChannels = entry.ac3Info.channels
-			entry.audioSpf = entry.ac3Info.spf
-			entry.audioBitRateKbps = entry.ac3Info.bitRateKbps
+		if !entry.hasAudioInfo && info.sampleRate > 0 {
+			entry.audioRate = info.sampleRate
+			entry.audioChannels = info.channels
+			entry.audioSpf = info.spf
+			entry.audioBitRateKbps = info.bitRateKbps
 			entry.hasAudioInfo = true
 		}
 		i += frameSize
@@ -1690,7 +2025,7 @@ func consumeAC3(entry *tsStream, payload []byte) {
 	}
 }
 
-func consumeEAC3(entry *tsStream, payload []byte) {
+func consumeEAC3(entry *tsStream, payload []byte, collectStats bool, statsHead bool) {
 	if len(payload) == 0 {
 		return
 	}
@@ -1718,16 +2053,15 @@ func consumeEAC3(entry *tsStream, payload []byte) {
 		}
 		entry.audioFrames++
 		entry.hasAC3 = true
-		const maxStatsBytes = 494 * 1024
-		if entry.ac3StatsBytes < maxStatsBytes {
-			entry.ac3Info.mergeFrame(info)
-			entry.ac3StatsBytes += uint64(frameSize)
+		entry.ac3Info.mergeFrameBase(info)
+		if collectStats {
+			entry.ac3Stats.mergeFrame(info)
 		}
-		if !entry.hasAudioInfo && entry.ac3Info.sampleRate > 0 {
-			entry.audioRate = entry.ac3Info.sampleRate
-			entry.audioChannels = entry.ac3Info.channels
-			entry.audioSpf = entry.ac3Info.spf
-			entry.audioBitRateKbps = entry.ac3Info.bitRateKbps
+		if !entry.hasAudioInfo && info.sampleRate > 0 {
+			entry.audioRate = info.sampleRate
+			entry.audioChannels = info.channels
+			entry.audioSpf = info.spf
+			entry.audioBitRateKbps = info.bitRateKbps
 			entry.hasAudioInfo = true
 		}
 		i += frameSize
