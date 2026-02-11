@@ -186,8 +186,8 @@ Owner: soup
 - Status (2026-02-11):
 - Parity snapshot (`mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - TS: `Nickelodeon - Halloween Bumper 2.ts` diff=0, `Evermoor Behind The Scenes.ts` diff=25 (mostly AC-3 stats).
-- BDAV/M2TS: `01099.m2ts` diff=4 (2-byte General/Video `StreamSize` split), `01007.m2ts` diff improved `44 -> 21`.
-- BDAV TrueHD bridge landed: detect TrueHD sync in 0x83-style streams; emit `Format=MLP FBA`, `MuxingMode=Stream extension`, TrueHD channel layout/positions while keeping AC-3 core extras.
+- BDAV/M2TS: `01099.m2ts` diff=4 (2-byte General/Video `StreamSize` split), `01007.m2ts` diff improved `44 -> 8`.
+- BDAV TrueHD bridge landed: detect TrueHD sync in 0x83-style streams; emit `Format=MLP FBA`, `MuxingMode=Stream extension`, TrueHD channel layout/positions + max bitrate while keeping AC-3 core extras.
 - Remaining big diffs: TS AC-3 stats sampling/count window parity; TS ATSC `Title`/`Movie` on some captures; BDAV video max bitrate/size edge cases; DVD/VOB duration/framecount/streamsize/GOP semantics; AVI container/video codec details (DivX/XviD specifics).
 
 - Perf notes:

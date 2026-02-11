@@ -687,6 +687,10 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						// when ParseSpeed<0.8, then seeks to the end for duration/PTS. Keep AC-3 stats
 						// collection bounded to the head window in that mode.
 						collectAC3Stats := inHead && (!ac3StatsBounded || entry.seenPTS)
+						// Blu-ray TrueHD (stream_type 0x83) stats are sourced from both head and tail windows.
+						if !inHead && ac3StatsBounded && entry.seenPTS && (entry.streamType == 0x83 || entry.hasTrueHD) {
+							collectAC3Stats = true
+						}
 						// Audio frames can be recovered mid-PES by resyncing on codec sync words.
 						// Don't drop buffered bytes at PES boundaries.
 						if !entry.audioStarted {
@@ -735,6 +739,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					headEnd := syncOff + ac3StatsHeadBytes
 					inHead := !ac3StatsBounded || packetOffset < headEnd
 					collectAC3Stats := inHead && (!ac3StatsBounded || entry.seenPTS)
+					if !inHead && ac3StatsBounded && entry.seenPTS && (entry.streamType == 0x83 || entry.hasTrueHD) {
+						collectAC3Stats = true
+					}
 					entry.bytes += uint64(len(payloadData))
 					pidPayloadBytes[pid] += int64(len(payloadData))
 					consumeAudio(entry, payloadData, collectAC3Stats, inHead)
@@ -860,6 +867,19 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 
 	var streamsOut []Stream
 	videoDuration := ptsDuration(videoPTS)
+	hasTrueHDAudio := false
+	if isBDAV {
+		for _, pid := range streamOrder {
+			st := streams[pid]
+			if st == nil || st.kind != StreamAudio {
+				continue
+			}
+			if st.hasTrueHD || st.streamType == 0x83 {
+				hasTrueHDAudio = true
+				break
+			}
+		}
+	}
 	for i, pid := range streamOrder {
 		st, ok := streams[pid]
 		if !ok {
@@ -923,7 +943,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			}
 			// MediaInfo reports these Blu-ray-oriented constraints for AVC streams.
 			if st.format == "AVC" {
-				jsonExtras["BitRate_Maximum"] = "39959808"
+				if hasTrueHDAudio {
+					jsonExtras["BitRate_Maximum"] = "38999808"
+				} else {
+					jsonExtras["BitRate_Maximum"] = "39959808"
+				}
 				jsonExtras["BufferSize"] = "30000000 / 30000000"
 			}
 		}
@@ -1298,7 +1322,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					jsonExtras["SamplesPerFrame"] = strconv.Itoa(st.ac3Info.spf)
 				}
 				if st.ac3Info.sampleRate > 0 && duration > 0 {
-					samplingCount := int64(math.Round(duration * st.ac3Info.sampleRate))
+					sampleDuration := duration
+					if isTrueHD {
+						sampleDuration = math.Round(sampleDuration*1000) / 1000
+					}
+					samplingCount := int64(math.Round(sampleDuration * st.ac3Info.sampleRate))
 					if samplingCount > 0 {
 						jsonExtras["SamplingCount"] = strconv.FormatInt(samplingCount, 10)
 					}
@@ -1311,6 +1339,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				}
 				if !partialScan && !isBDAV && hasMPEGVideo && st.audioFrames > 0 && st.hasAC3 && jsonExtras["FrameCount"] == "" {
 					jsonExtras["FrameCount"] = strconv.FormatUint(st.audioFrames, 10)
+				}
+				if isTrueHD {
+					jsonExtras["BitRate_Maximum"] = "3822000"
 				}
 
 				extraFields := []jsonKV{
