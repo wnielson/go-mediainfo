@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -96,6 +97,66 @@ func (s *tsStream) hasValidCEA608() bool {
 		return true
 	}
 	return false
+}
+
+func normalizeTSStreamOrder(order []uint16, streams map[uint16]*tsStream, isBDAV bool) []uint16 {
+	seen := make(map[uint16]struct{}, len(order))
+	normalized := make([]uint16, 0, len(order))
+	for _, pid := range order {
+		if _, ok := streams[pid]; !ok {
+			continue
+		}
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		normalized = append(normalized, pid)
+	}
+	if !isBDAV {
+		return normalized
+	}
+	priority := func(st *tsStream) int {
+		if st == nil {
+			return 4
+		}
+		switch st.kind {
+		case StreamVideo:
+			return 0
+		case StreamAudio:
+			return 1
+		case StreamText:
+			return 2
+		default:
+			return 3
+		}
+	}
+	sort.SliceStable(normalized, func(i, j int) bool {
+		left := streams[normalized[i]]
+		right := streams[normalized[j]]
+		lp := priority(left)
+		rp := priority(right)
+		if lp != rp {
+			return lp < rp
+		}
+		if left != nil && right != nil && left.programNumber != right.programNumber {
+			return left.programNumber < right.programNumber
+		}
+		return normalized[i] < normalized[j]
+	})
+	return normalized
+}
+
+func mpeg2TSGOPValue(info mpeg2VideoInfo) string {
+	if info.GOPVariable {
+		return "Variable"
+	}
+	if info.ScanType == "Interlaced" && info.GOPM > 0 && info.GOPN > 0 {
+		return fmt.Sprintf("M=%d, N=%d", info.GOPM, info.GOPN)
+	}
+	if info.GOPLength > 0 {
+		return formatGOPLength(info.GOPLength)
+	}
+	return ""
 }
 
 type mpeg2UserDataPacket struct {
@@ -863,6 +924,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 	}
 
+	streamOrder = normalizeTSStreamOrder(streamOrder, streams, isBDAV)
+
 	var streamsOut []Stream
 	videoDuration := ptsDuration(videoPTS)
 	hasTrueHDAudio := false
@@ -990,12 +1053,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if info.Matrix == "Custom" && info.MatrixData != "" {
 				jsonExtras["Format_Settings_Matrix_Data"] = info.MatrixData
 			}
-			if info.ScanType == "Interlaced" && info.GOPM > 0 && info.GOPN > 0 {
-				fields = append(fields, Field{Name: "Format settings, GOP", Value: fmt.Sprintf("M=%d, N=%d", info.GOPM, info.GOPN)})
-			} else if info.GOPVariable {
-				fields = append(fields, Field{Name: "Format settings, GOP", Value: "Variable"})
-			} else if info.GOPLength > 0 {
-				fields = append(fields, Field{Name: "Format settings, GOP", Value: formatGOPLength(info.GOPLength)})
+			if gop := mpeg2TSGOPValue(info); gop != "" {
+				fields = append(fields, Field{Name: "Format settings, GOP", Value: gop})
 			}
 			if info.ScanType == "Interlaced" && info.PictureStructure != "" {
 				fields = append(fields, Field{Name: "Format settings, Picture structure", Value: info.PictureStructure})
