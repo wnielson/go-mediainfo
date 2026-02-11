@@ -1081,9 +1081,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				info := st.mpeg2Info
 				if info.IntraDCPrecision > 0 {
 					intra := info.IntraDCPrecision
-					// Heuristic to match MediaInfoLib ParseSpeed sampling: for short TS (<= ~30s),
-					// intra_dc_precision tends to reflect the initial scan window.
-					if duration <= 30.0 && info.IntraDCPrecisionFirst > 0 {
+					// BDAV keeps closer parity with first-window intra_dc_precision on short clips.
+					if isBDAV && duration <= 30.0 && info.IntraDCPrecisionFirst > 0 {
 						intra = info.IntraDCPrecisionFirst
 					}
 					if jsonRaw == nil {
