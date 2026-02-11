@@ -205,8 +205,9 @@ Owner: soup
 - BDAV/M2TS: `01099.m2ts` diff=4 (2-byte General/Video `StreamSize` split), `01007.m2ts` diff improved `44 -> 8`.
 - BDAV TrueHD bridge landed: detect TrueHD sync in 0x83-style streams; emit `Format=MLP FBA`, `MuxingMode=Stream extension`, TrueHD channel layout/positions + max bitrate while keeping AC-3 core extras.
 - BDAV DTS fallback landed: infer DTS on 0x11xx audio PIDs when PMT is missing and parse core DTS fields (`channels/sampling/framecount/codec id`) with DTS-HD extension detection for JSON mode/commercial fields.
-- `ptp-archive` BDAV sweep (40-file sample): `old_avg=24.60 -> new_avg=16.75`, `improved=18 same=22 worse=0`.
-- New focused diffs after DTS fallback: `00001.m2ts=54` (from 90), `00003.m2ts=35` (from 71), `00206.m2ts=26` (from 44), `00201.m2ts=26` (from 44).
+- BDAV AVC parity tweak landed: `BitRate_Maximum`/`BufferSize` now branch by detected audio family (`TrueHD=38999808 + dual buffer`, `DTS=35000000 + single buffer`, fallback unchanged).
+- `ptp-archive` BDAV sweep (40-file sample): `old_avg=24.60 -> new_avg=15.05`, `improved=18 same=22 worse=0`.
+- New focused diffs after DTS + AVC tweaks: `00001.m2ts=50` (from 90), `00003.m2ts=31` (from 71), `00206.m2ts=22` (from 44), `00201.m2ts=22` (from 44).
 - Remaining big diffs: TS AC-3 stats sampling/count window parity; TS ATSC `Title`/`Movie` on some captures; BDAV video max bitrate/size edge cases; DVD/VOB duration/framecount/streamsize/GOP semantics; AVI container/video codec details (DivX/XviD specifics).
 
 - Perf notes:

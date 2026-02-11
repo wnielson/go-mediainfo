@@ -866,6 +866,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	var streamsOut []Stream
 	videoDuration := ptsDuration(videoPTS)
 	hasTrueHDAudio := false
+	hasDTSAudio := false
 	if isBDAV {
 		for _, pid := range streamOrder {
 			st := streams[pid]
@@ -874,7 +875,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			}
 			if st.hasTrueHD || st.streamType == 0x83 {
 				hasTrueHDAudio = true
-				break
+			}
+			if st.format == "DTS" || st.streamType == 0x82 || st.streamType == 0x86 {
+				hasDTSAudio = true
 			}
 		}
 	}
@@ -943,10 +946,14 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				}
 				if hasTrueHDAudio {
 					jsonExtras["BitRate_Maximum"] = "38999808"
+					jsonExtras["BufferSize"] = "30000000 / 30000000"
+				} else if hasDTSAudio {
+					jsonExtras["BitRate_Maximum"] = "35000000"
+					jsonExtras["BufferSize"] = "30000000"
 				} else {
 					jsonExtras["BitRate_Maximum"] = "39959808"
+					jsonExtras["BufferSize"] = "30000000 / 30000000"
 				}
-				jsonExtras["BufferSize"] = "30000000 / 30000000"
 			}
 		}
 		fields := []Field{{Name: "ID", Value: formatStreamID(st.pid)}}
