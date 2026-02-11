@@ -26,6 +26,9 @@ Owner: soup
 - M2TS `01007.m2ts`: diff `8` (remaining: AC-3 dynrng stats + 1-byte StreamSize split).
 - M2TS `01099.m2ts`: diff `4` (remaining: 2-byte General/Video StreamSize split).
 - Non-TS spot checks: `mp4/mp3/flac/avi` at `0`; one sampled `mkv` at `1`.
+- Extended TS sweep (`/mnt/storage/torrents/keepalive/Halloween 2014 Promos and Bumpers Pack`, 12-file sample):
+- Diff range `13..64`; recurring gaps are AC-3 `dynrng_*` count windows, MPEG-2 `Format_Settings_Matrix`/`intra_dc_precision`, caption service mapping (extra/misaligned text tracks), and missing General `Title`/`Movie` on some captures.
+- GOP experiment note: forcing `Variable` on interlaced TS improves some Cartoon Network captures but regresses Nick captures; reverted for now.
 - Remaining highest-impact work:
 - TS/BDAV AC-3 stats parity (`compr_*`/`dynrng_*` counts + averaging windows).
 - BDAV/TS tiny General vs Video `StreamSize` byte-allocation parity (1-3 byte deltas).
