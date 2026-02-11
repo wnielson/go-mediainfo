@@ -959,10 +959,15 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if info.Matrix == "Custom" && info.MatrixData != "" {
 				jsonExtras["Format_Settings_Matrix_Data"] = info.MatrixData
 			}
-			if info.GOPVariable {
+			if info.ScanType == "Interlaced" && info.GOPM > 0 && info.GOPN > 0 {
+				fields = append(fields, Field{Name: "Format settings, GOP", Value: fmt.Sprintf("M=%d, N=%d", info.GOPM, info.GOPN)})
+			} else if info.GOPVariable {
 				fields = append(fields, Field{Name: "Format settings, GOP", Value: "Variable"})
 			} else if info.GOPLength > 0 {
 				fields = append(fields, Field{Name: "Format settings, GOP", Value: formatGOPLength(info.GOPLength)})
+			}
+			if info.ScanType == "Interlaced" && info.PictureStructure != "" {
+				fields = append(fields, Field{Name: "Format settings, Picture structure", Value: info.PictureStructure})
 			}
 		}
 		if st.kind == StreamVideo {
@@ -1129,6 +1134,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				}
 				if info.ScanType != "" {
 					fields = append(fields, Field{Name: "Scan type", Value: info.ScanType})
+				}
+				if info.ScanOrder != "" {
+					fields = append(fields, Field{Name: "Scan order", Value: info.ScanOrder})
 				}
 				fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
 				if duration > 0 && st.width > 0 && st.height > 0 && st.videoFrameRate > 0 {

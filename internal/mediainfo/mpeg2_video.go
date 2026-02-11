@@ -98,6 +98,7 @@ type mpeg2VideoInfo struct {
 	BitDepth                 string
 	ScanType                 string
 	ScanOrder                string
+	PictureStructure         string
 	MatrixData               string
 	BufferSize               int64
 	IntraDCPrecision         int
@@ -145,6 +146,7 @@ type mpeg2VideoParser struct {
 	repeatFirstField  int
 	topFieldFirst     int
 	intraDCCounts     map[int]int
+	pictureStructures map[int]int
 }
 
 func (p *mpeg2VideoParser) recordGOPMCount() {
@@ -225,6 +227,8 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 	loadIntra := br.readBitsValue(1)
 	customMatrix := false
 	matrixKnown := false
+	intraMatrixData := ""
+	nonIntraMatrixData := ""
 	if loadIntra == 1 {
 		var m [64]byte
 		ok := true
@@ -240,9 +244,7 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 			matrixKnown = true
 			if !isDefaultMPEG2IntraMatrix(m) {
 				customMatrix = true
-				if p.info.MatrixData == "" {
-					p.info.MatrixData = formatMPEG2MatrixHex(m)
-				}
+				intraMatrixData = formatMPEG2MatrixHex(m)
 			}
 		}
 	}
@@ -262,10 +264,18 @@ func (p *mpeg2VideoParser) parseSequenceHeader(data []byte) {
 			matrixKnown = true
 			if !isDefaultMPEG2Matrix(m, mpeg2DefaultNonIntraMatrix) {
 				customMatrix = true
-				if p.info.MatrixData == "" {
-					p.info.MatrixData = formatMPEG2MatrixHex(m)
-				}
+				nonIntraMatrixData = formatMPEG2MatrixHex(m)
 			}
+		}
+	}
+	if p.info.MatrixData == "" {
+		switch {
+		case intraMatrixData != "" && nonIntraMatrixData != "":
+			p.info.MatrixData = intraMatrixData + " / " + nonIntraMatrixData
+		case intraMatrixData != "":
+			p.info.MatrixData = intraMatrixData
+		case nonIntraMatrixData != "":
+			p.info.MatrixData = nonIntraMatrixData
 		}
 	}
 
@@ -417,6 +427,10 @@ func (p *mpeg2VideoParser) parseExtension(data []byte) {
 			}
 		}
 		if pictureStructure != ^uint64(0) {
+			if p.pictureStructures == nil {
+				p.pictureStructures = map[int]int{}
+			}
+			p.pictureStructures[int(pictureStructure)]++
 			p.pictureCount++
 			if progressiveFrame == 1 {
 				p.progressiveFrames++
@@ -618,6 +632,10 @@ func (p *mpeg2VideoParser) finalize() mpeg2VideoInfo {
 	if p.info.Matrix == "" {
 		p.info.Matrix = "Default"
 	}
+	if p.info.PictureStructure == "" && len(p.pictureStructures) > 0 {
+		mode, _ := modeValue(p.pictureStructures)
+		p.info.PictureStructure = mapMPEG2PictureStructure(mode)
+	}
 	if len(p.intraDCCounts) > 0 {
 		mode, _ := modeValue(p.intraDCCounts)
 		p.info.IntraDCPrecision = 8 + mode
@@ -672,6 +690,21 @@ func (p *mpeg2VideoParser) finalizeTS() mpeg2VideoInfo {
 	}
 	if p.firstIntraDCOk {
 		info.IntraDCPrecisionFirst = 8 + p.firstIntraDC
+	}
+	// TS parity: on interlaced streams, MediaInfo still reports dominant M/N GOP values
+	// and frame picture structure even when GOP lengths vary.
+	if info.ScanType == "Interlaced" {
+		if info.GOPM == 0 && len(p.gopMCounts) > 0 {
+			mode, _ := modeValue(p.gopMCounts)
+			info.GOPM = mode
+		}
+		if info.GOPN == 0 && len(p.gopNCounts) > 0 {
+			mode, _ := modeValue(p.gopNCounts)
+			info.GOPN = mode
+		}
+		if info.PictureStructure == "" && info.ScanOrder != "" {
+			info.PictureStructure = "Frame"
+		}
 	}
 	return info
 }
@@ -800,6 +833,17 @@ func mapMPEG2Chroma(code uint64) string {
 		return "4:2:2"
 	case 3:
 		return "4:4:4"
+	default:
+		return ""
+	}
+}
+
+func mapMPEG2PictureStructure(code int) string {
+	switch code {
+	case 1, 2:
+		return "Field"
+	case 3:
+		return "Frame"
 	default:
 		return ""
 	}

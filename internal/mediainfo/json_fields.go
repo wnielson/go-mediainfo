@@ -170,6 +170,8 @@ func mapStreamFieldsToJSON(kind StreamKind, fields []Field) []jsonKV {
 			out = append(out, jsonKV{Key: "Format_Settings_Matrix", Val: field.Value})
 		case "Format settings, GOP":
 			out = append(out, jsonKV{Key: "Format_Settings_GOP", Val: field.Value})
+		case "Format settings, Picture structure":
+			out = append(out, jsonKV{Key: "Format_Settings_PictureStructure", Val: field.Value})
 		case "Format settings, Reference frames":
 			out = append(out, jsonKV{Key: "Format_Settings_RefFrames", Val: extractLeadingNumber(field.Value)})
 		case "Format settings":

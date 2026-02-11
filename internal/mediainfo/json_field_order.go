@@ -62,6 +62,7 @@ var jsonVideoFieldOrder = map[string]int{
 	"Format_Settings_Matrix":            14,
 	"Format_Settings_Matrix_Data":       15,
 	"Format_Settings_GOP":               16,
+	"Format_Settings_PictureStructure":  16,
 	"CodecID":                           17,
 	"Duration":                          18,
 	"BitRate_Mode":                      19,
