@@ -87,3 +87,45 @@ func TestParseAC3Frame_Mono_NoCmixlev(t *testing.T) {
 		t.Fatalf("compr mismatch: compre=%v hasComprField=%v hasCompr=%v comprCode=0x%02x want=0x%02x", info.compre, info.hasComprField, info.hasCompr, info.comprCode, compr)
 	}
 }
+
+func TestParseAC3Frame_RejectsInvalidBSID(t *testing.T) {
+	const (
+		fscod      = 0
+		frmsizecod = 0
+		bsid       = 11 // invalid for core AC-3
+	)
+
+	frameSize := ac3FrameSizeBytes(fscod, frmsizecod)
+	if frameSize == 0 {
+		t.Fatalf("unexpected frameSize=0 for fscod=%d frmsizecod=%d", fscod, frmsizecod)
+	}
+	buf := make([]byte, frameSize)
+	bw := ac3BitWriter{buf: buf}
+
+	bw.writeBits(0x0B77, 16)    // syncword
+	bw.writeBits(0x0000, 16)    // crc1
+	bw.writeBits(fscod, 2)      // fscod
+	bw.writeBits(frmsizecod, 6) // frmsizecod
+	bw.writeBits(bsid, 5)       // bsid
+	bw.writeBits(0, 3)          // bsmod
+	bw.writeBits(2, 3)          // acmod
+	bw.writeBits(0, 1)          // lfeon
+	bw.writeBits(24, 5)         // dialnorm
+	bw.writeBits(0, 1)          // compre
+	bw.writeBits(0, 1)          // langcode
+	bw.writeBits(0, 1)          // audprodie
+	bw.writeBits(0, 1)          // copyrightb
+	bw.writeBits(0, 1)          // origbs
+	bw.writeBits(0, 1)          // timecod1e
+	bw.writeBits(0, 1)          // timecod2e
+	bw.writeBits(0, 1)          // addbsie
+	bw.writeBits(0, 1)          // blksw[0]
+	bw.writeBits(0, 1)          // blksw[1]
+	bw.writeBits(0, 1)          // dithflag[0]
+	bw.writeBits(0, 1)          // dithflag[1]
+	bw.writeBits(0, 1)          // dynrnge
+
+	if _, _, ok := parseAC3Frame(buf); ok {
+		t.Fatalf("parseAC3Frame unexpectedly accepted invalid bsid=%d", bsid)
+	}
+}

@@ -995,6 +995,14 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if info.ScanType == "Interlaced" && info.PictureStructure != "" {
 				fields = append(fields, Field{Name: "Format settings, Picture structure", Value: info.PictureStructure})
 			}
+			if info.GOPM > 0 && info.GOPN > 0 && info.GOPOpenClosed != "" {
+				fields = append(fields, Field{Name: "GOP, Open/Closed", Value: info.GOPOpenClosed})
+				jsonExtras["Gop_OpenClosed"] = info.GOPOpenClosed
+			}
+			if info.GOPM > 0 && info.GOPN > 0 && info.GOPFirstClosed != "" {
+				fields = append(fields, Field{Name: "GOP, Open/Closed of first frame", Value: info.GOPFirstClosed})
+				jsonExtras["Gop_OpenClosed_FirstFrame"] = info.GOPFirstClosed
+			}
 		}
 		if st.kind == StreamVideo {
 			if info := mapMatroskaFormatInfo(st.format); info != "" {
@@ -2138,6 +2146,11 @@ func consumeAC3(entry *tsStream, payload []byte, collectStats bool, statsHead bo
 		// Avoid false-positive sync matches by requiring the next frame sync when available.
 		if i+frameSize+1 < len(entry.audioBuffer) {
 			if entry.audioBuffer[i+frameSize] != 0x0B || entry.audioBuffer[i+frameSize+1] != 0x77 {
+				i++
+				continue
+			}
+			// Tighten AC-3 resync validation: the following frame header must parse too.
+			if _, _, ok := parseAC3Frame(entry.audioBuffer[i+frameSize:]); !ok {
 				i++
 				continue
 			}

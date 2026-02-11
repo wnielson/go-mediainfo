@@ -171,6 +171,15 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	if !ok {
 		return info, 0, false
 	}
+	// Core AC-3 bitstream_id is 0..10.
+	// Rejecting out-of-range values avoids false-positive sync matches when scanning TS payloads.
+	if bsid > 10 {
+		return info, 0, false
+	}
+	// fscod==3 is invalid for legacy AC-3 (bsid<=8). MediaInfo rejects these frames.
+	if bsid <= 8 && fscod == 3 {
+		return info, 0, false
+	}
 	bsmod, ok := br.readBits(3)
 	if !ok {
 		return info, 0, false
