@@ -18,6 +18,18 @@ Owner: soup
 - MP4 sample
 - VOB sample (`VTS_01_2.vob`) after `fix(mpeg-ps): improve VOB parity`
 
+## Status (2026-02-11)
+- CI: green locally (`go test ./...`, `gofmt -w` clean).
+- Focused parity samples (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- TS `Nickelodeon - Generic Halloween Promo.ts`: diff `12` (down from `14` this pass; GOP JSON parity improved).
+- TS `Disney Channel - Evermoor Behind The Scenes.ts`: diff `25` (remaining: AC-3 stats/count windows).
+- M2TS `01007.m2ts`: diff `8` (remaining: AC-3 dynrng stats + 1-byte StreamSize split).
+- M2TS `01099.m2ts`: diff `4` (remaining: 2-byte General/Video StreamSize split).
+- Non-TS spot checks: `mp4/mp3/flac/avi` at `0`; one sampled `mkv` at `1`.
+- Remaining highest-impact work:
+- TS/BDAV AC-3 stats parity (`compr_*`/`dynrng_*` counts + averaging windows).
+- BDAV/TS tiny General vs Video `StreamSize` byte-allocation parity (1-3 byte deltas).
+
 ## Learnings / Decisions
 - Command name: mediainfo
 - Parity target: MediaInfo-master in this repo
