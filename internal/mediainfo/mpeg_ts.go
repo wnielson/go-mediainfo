@@ -64,6 +64,7 @@ type tsStream struct {
 	audioSpf             int
 	audioBitRateKbps     int64
 	audioBitRateMode     string
+	hasTrueHD            bool
 	videoFrameRate       float64
 	pesData              []byte
 	audioBuffer          []byte
@@ -110,6 +111,7 @@ func ParseBDAV(file io.ReadSeeker, size int64, parseSpeed float64) (ContainerInf
 }
 
 const tsPTSGap = 30 * 90000 // 30 seconds
+const tsRegistrationHDMV = 0x48444D56
 
 // MediaInfoLib default: scan up to 64 MiB from the beginning and end of a TS when ParseSpeed<0.8.
 // We use this window size for TS/BDAV AC-3 stats sampling to match official outputs at ParseSpeed=0.5.
@@ -631,9 +633,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					headerLen := int(payload[8])
 					dataStart := min(9+headerLen, len(payload))
 					data := payload[dataStart:]
-					if entry.kind == StreamVideo && entry.format == "MPEG Video" {
-						entry.pesPayloadKnown = false
-						entry.pesPayloadRemaining = 0
+					entry.pesPayloadKnown = false
+					entry.pesPayloadRemaining = 0
+					if entry.kind == StreamAudio || (entry.kind == StreamVideo && entry.format == "MPEG Video") {
 						if len(payload) >= 6 {
 							pesLen := int(binary.BigEndian.Uint16(payload[4:6]))
 							if pesLen > 0 {
@@ -647,9 +649,6 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 								data = data[:usable]
 							}
 						}
-					} else {
-						entry.pesPayloadKnown = false
-						entry.pesPayloadRemaining = 0
 					}
 					entry.bytes += uint64(len(data))
 					// BDAV: count PES headers as part of video payload for stream size parity.
@@ -715,7 +714,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					entry.pesData = append(entry.pesData, payload...)
 				}
 				payloadData := payload
-				if entry.kind == StreamVideo && entry.format == "MPEG Video" && entry.pesPayloadKnown {
+				if entry.pesPayloadKnown {
 					if entry.pesPayloadRemaining <= 0 {
 						continue
 					}
@@ -726,7 +725,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(payloadData) > 0 {
 					consumeMPEG2TSVideo(entry, payloadData, entry.lastPTS, entry.hasLastPTS)
 				}
-				if entry.kind == StreamAudio && len(payload) > 0 {
+				if entry.kind == StreamAudio && len(payloadData) > 0 {
 					// Like MediaInfoLib, avoid parsing audio mid-PES before we've seen a PES start
 					// for that PID, otherwise we may resync on false-positive AC-3 sync words and
 					// skew stats vs official output.
@@ -736,9 +735,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					headEnd := syncOff + ac3StatsHeadBytes
 					inHead := !ac3StatsBounded || packetOffset < headEnd
 					collectAC3Stats := inHead && (!ac3StatsBounded || entry.seenPTS)
-					entry.bytes += uint64(len(payload))
-					pidPayloadBytes[pid] += int64(len(payload))
-					consumeAudio(entry, payload, collectAC3Stats, inHead)
+					entry.bytes += uint64(len(payloadData))
+					pidPayloadBytes[pid] += int64(len(payloadData))
+					consumeAudio(entry, payloadData, collectAC3Stats, inHead)
 				}
 				if entry.kind != StreamAudio && len(payloadData) > 0 {
 					entry.bytes += uint64(len(payloadData))
@@ -866,6 +865,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		if !ok {
 			continue
 		}
+		isTrueHD := isBDAV && (st.hasTrueHD || st.streamType == 0x83)
 
 		jsonExtras := map[string]string{}
 		var jsonRaw map[string]string
@@ -932,7 +932,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			fields = append(fields, Field{Name: "Menu ID", Value: formatID(uint64(st.programNumber))})
 		}
 		format := st.format
-		if st.kind == StreamAudio && st.audioProfile != "" {
+		if isTrueHD {
+			format = "MLP FBA"
+		} else if st.kind == StreamAudio && st.audioProfile != "" {
 			format = "AAC " + st.audioProfile
 		}
 		if format != "" {
@@ -982,7 +984,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			}
 		}
 		if st.kind == StreamAudio {
-			if st.audioProfile == "LC" {
+			if isTrueHD {
+				fields = append(fields, Field{Name: "Muxing mode", Value: "Stream extension"})
+			} else if st.audioProfile == "LC" {
 				fields = append(fields, Field{Name: "Format/Info", Value: "Advanced Audio Codec Low Complexity"})
 				fields = append(fields, Field{Name: "Format version", Value: formatAACVersion(st.audioMPEGVersion)})
 				fields = append(fields, Field{Name: "Muxing mode", Value: "ADTS"})
@@ -1164,7 +1168,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if !isBDAV && hasMPEGVideo && st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && duration > 0 {
 				duration += float64(st.ac3Info.spf) / float64(st.ac3Info.sampleRate)
 			}
-			if !partialScan && st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && st.audioFrames > 0 {
+			if !isTrueHD && !partialScan && st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && st.audioFrames > 0 {
 				rate := int64(st.ac3Info.sampleRate)
 				if rate > 0 {
 					samples := st.audioFrames * uint64(st.ac3Info.spf)
@@ -1172,7 +1176,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					duration = float64(durationMs) / 1000.0
 				}
 			}
-			if !partialScan && st.audioRate > 0 && st.audioFrames > 0 && st.audioSpf > 0 {
+			if !isTrueHD && !partialScan && st.audioRate > 0 && st.audioFrames > 0 && st.audioSpf > 0 {
 				rate := int64(st.audioRate)
 				if rate > 0 {
 					samples := st.audioFrames * uint64(st.audioSpf)
@@ -1233,24 +1237,44 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				if mode == "" {
 					mode = "Variable"
 				}
+				if isTrueHD {
+					mode = "Variable"
+					jsonExtras["BitRate_Mode"] = "VBR"
+				}
 				fields = append(fields, Field{Name: "Bit rate mode", Value: mode})
 				if st.audioBitRateKbps > 0 {
 					fields = append(fields, Field{Name: "Bit rate", Value: formatBitrate(float64(st.audioBitRateKbps) * 1000)})
 				}
-				fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(st.audioChannels)})
-				layout := channelLayout(st.audioChannels)
-				if st.format == "AC-3" && st.audioChannels == 6 {
+				channels := st.audioChannels
+				if isTrueHD && channels < 8 {
+					channels = 8
+				}
+				fields = append(fields, Field{Name: "Channel(s)", Value: formatChannels(channels)})
+				layout := channelLayout(channels)
+				if isTrueHD {
+					layout = "L R C LFE Ls Rs Lb Rb"
+				}
+				if !isTrueHD && st.format == "AC-3" && st.audioChannels == 6 {
 					layout = "L R C LFE Ls Rs"
 				}
 				if layout != "" {
 					fields = append(fields, Field{Name: "Channel layout", Value: layout})
+				}
+				if isTrueHD {
+					jsonExtras["ChannelLayout"] = "L R C LFE Ls Rs Lb Rb"
+					jsonExtras["ChannelPositions"] = "Front: L C R, Side: L R, Back: L R, LFE"
 				}
 				fields = append(fields, Field{Name: "Sampling rate", Value: formatSampleRate(st.audioRate)})
 				if st.audioSpf > 0 {
 					frameRate := st.audioRate / float64(st.audioSpf)
 					fields = append(fields, Field{Name: "Frame rate", Value: fmt.Sprintf("%.3f FPS (%d SPF)", frameRate, st.audioSpf)})
 				}
-				fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
+				compressionMode := "Lossy"
+				if isTrueHD {
+					compressionMode = "Lossless"
+					jsonExtras["Compression_Mode"] = "Lossless"
+				}
+				fields = append(fields, Field{Name: "Compression mode", Value: compressionMode})
 				if videoPTS.has() && st.pts.has() {
 					delay := float64(int64(st.pts.min)-int64(videoPTS.min)) * 1000 / 90000.0
 					fields = append(fields, Field{Name: "Delay relative to video", Value: fmt.Sprintf("%d ms", int64(math.Round(delay)))})
@@ -1260,7 +1284,12 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if st.hasAC3 {
 				// Match MediaInfo's extra AC-3 metadata fields for TS/BDAV.
 				jsonExtras["Format_Settings_Endianness"] = "Big"
-				if st.format == "AC-3" {
+				if isTrueHD {
+					jsonExtras["Format_Commercial_IfAny"] = "Dolby TrueHD"
+					jsonExtras["MuxingMode"] = "Stream extension"
+					jsonExtras["BitRate_Mode"] = "VBR"
+					jsonExtras["Compression_Mode"] = "Lossless"
+				} else if st.format == "AC-3" {
 					jsonExtras["Format_Commercial_IfAny"] = "Dolby Digital"
 				} else if st.format == "E-AC-3" {
 					jsonExtras["Format_Commercial_IfAny"] = "Dolby Digital Plus"
@@ -1752,6 +1781,10 @@ func parsePMT(payload []byte, programNumber uint16) ([]tsStream, uint16, int, in
 	}
 	pcrPID := binary.BigEndian.Uint16(section[8:10]) & 0x1FFF
 	programInfoLen := int(binary.BigEndian.Uint16(section[10:12]) & 0x0FFF)
+	programFormatID := uint32(0)
+	if programInfoLen > 0 && 12+programInfoLen <= len(section) {
+		programFormatID = parseRegistrationFormatID(section[12 : 12+programInfoLen])
+	}
 	pos := 12 + programInfoLen
 	end := 3 + sectionLen - 4
 	if pos > end {
@@ -1763,10 +1796,14 @@ func parsePMT(payload []byte, programNumber uint16) ([]tsStream, uint16, int, in
 		pid := binary.BigEndian.Uint16(section[pos+1:pos+3]) & 0x1FFF
 		esInfoLen := int(binary.BigEndian.Uint16(section[pos+3:pos+5]) & 0x0FFF)
 		language := ""
+		formatID := programFormatID
 		descStart := pos + 5
 		descEnd := descStart + esInfoLen
 		if esInfoLen > 0 && descEnd <= end && descEnd <= len(section) {
 			descs := section[descStart:descEnd]
+			if streamFormatID := parseRegistrationFormatID(descs); streamFormatID != 0 {
+				formatID = streamFormatID
+			}
 			for i := 0; i+2 <= len(descs); {
 				tag := descs[i]
 				length := int(descs[i+1])
@@ -1784,7 +1821,7 @@ func parsePMT(payload []byte, programNumber uint16) ([]tsStream, uint16, int, in
 				i += length
 			}
 		}
-		kind, format := mapTSStream(streamType)
+		kind, format := mapTSStream(streamType, formatID)
 		if kind != "" {
 			streams = append(streams, tsStream{pid: pid, programNumber: programNumber, streamType: streamType, kind: kind, format: format, language: language})
 		}
@@ -1793,7 +1830,41 @@ func parsePMT(payload []byte, programNumber uint16) ([]tsStream, uint16, int, in
 	return streams, pcrPID, pointer, sectionLen
 }
 
-func mapTSStream(streamType byte) (StreamKind, string) {
+func parseRegistrationFormatID(descs []byte) uint32 {
+	for i := 0; i+2 <= len(descs); {
+		tag := descs[i]
+		length := int(descs[i+1])
+		i += 2
+		if i+length > len(descs) {
+			break
+		}
+		if tag == 0x05 && length >= 4 {
+			return binary.BigEndian.Uint32(descs[i : i+4])
+		}
+		i += length
+	}
+	return 0
+}
+
+func mapTSStream(streamType byte, formatID uint32) (StreamKind, string) {
+	if formatID == tsRegistrationHDMV {
+		switch streamType {
+		case 0x80:
+			return StreamAudio, "PCM"
+		case 0x81:
+			return StreamAudio, "AC-3"
+		case 0x82:
+			return StreamAudio, "DTS"
+		case 0x83:
+			// Blu-ray AC-3 with TrueHD extension.
+			return StreamAudio, "AC-3"
+		case 0x84:
+			return StreamAudio, "E-AC-3"
+		case 0x90, 0x91:
+			return StreamText, "PGS"
+		}
+	}
+
 	switch streamType {
 	case 0x01:
 		return StreamVideo, "MPEG Video"
@@ -1897,6 +1968,9 @@ func inferBDAVStream(pid uint16, data []byte) (StreamKind, string, byte, bool) {
 	// 0x11xx: audio streams (codec sniff).
 	if pid&0xFF00 == 0x1100 {
 		if len(data) > 0 {
+			if hasTrueHDSync(data) {
+				return StreamAudio, "AC-3", 0x83, true
+			}
 			// AC-3 / E-AC-3 sync word
 			if idx := bytes.Index(data, []byte{0x0B, 0x77}); idx >= 0 && idx < 64 {
 				if _, _, ok := parseEAC3FrameWithOptions(data[idx:], true); ok {
@@ -2011,6 +2085,10 @@ func consumeAC3(entry *tsStream, payload []byte, collectStats bool, statsHead bo
 	if len(payload) == 0 {
 		return
 	}
+	if hasTrueHDSync(payload) {
+		entry.hasTrueHD = true
+		entry.streamType = 0x83
+	}
 	entry.audioBuffer = append(entry.audioBuffer, payload...)
 	i := 0
 	for i+7 <= len(entry.audioBuffer) {
@@ -2057,6 +2135,10 @@ func consumeEAC3(entry *tsStream, payload []byte, collectStats bool, statsHead b
 	if len(payload) == 0 {
 		return
 	}
+	if hasTrueHDSync(payload) {
+		entry.hasTrueHD = true
+		entry.streamType = 0x83
+	}
 	entry.audioBuffer = append(entry.audioBuffer, payload...)
 	i := 0
 	for i+7 <= len(entry.audioBuffer) {
@@ -2097,6 +2179,15 @@ func consumeEAC3(entry *tsStream, payload []byte, collectStats bool, statsHead b
 	if i > 0 {
 		entry.audioBuffer = append(entry.audioBuffer[:0], entry.audioBuffer[i:]...)
 	}
+}
+
+func hasTrueHDSync(payload []byte) bool {
+	for i := 0; i+4 <= len(payload); i++ {
+		if payload[i] == 0xF8 && payload[i+1] == 0x72 && payload[i+2] == 0x6F && (payload[i+3]&0xFE) == 0xBA {
+			return true
+		}
+	}
+	return false
 }
 
 func adtsSampleRate(index int) float64 {
