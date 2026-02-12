@@ -216,7 +216,7 @@ func defaultConfig() Config {
 		OutputPath:   ".cache/ptp-scan/candidates.jsonl",
 		StatePath:    ".cache/ptp-scan/state.json",
 		DryRun:       true,
-		Queries:      []string{"bd-m2ts", "file-m2ts", "file-ts"},
+		Queries:      []string{"bd-m2ts", "file-m2ts", "file-ts", "file-mpls"},
 		MaxPages:     3,
 		MaxRequests:  40,
 		MinInterval:  20 * time.Second,
@@ -267,6 +267,18 @@ func defaultPresets() map[string]queryPreset {
 				"order_by":      "time",
 				"order_way":     "desc",
 				"filelist":      ".ts",
+				"filter_cat[1]": "1",
+			},
+		},
+		"file-mpls": {
+			Name: "file-mpls",
+			Params: map[string]string{
+				"action":        "advanced",
+				"json":          "noredirect",
+				"grouping":      "0",
+				"order_by":      "time",
+				"order_way":     "desc",
+				"filelist":      ".mpls",
 				"filter_cat[1]": "1",
 			},
 		},
@@ -689,6 +701,9 @@ func pickBool(m map[string]any, keys ...string) bool {
 }
 
 func isTargetCandidate(c candidate) bool {
+	if strings.Contains(strings.ToLower(c.Query), "mpls") {
+		return true
+	}
 	hay := strings.ToLower(strings.Join([]string{c.Media, c.Source, c.Container, c.Codec, c.Title, c.Permalink, c.DownloadURL}, " "))
 	if strings.Contains(hay, ".m2ts") || strings.Contains(hay, " m2ts") {
 		return true
