@@ -37,6 +37,7 @@ type Config struct {
 	Backoff429   time.Duration
 	BackoffError time.Duration
 	MaxBackoff   time.Duration
+	MinSeeders   int
 }
 
 type state struct {
@@ -63,6 +64,7 @@ type candidate struct {
 	Source       string `json:"source,omitempty"`
 	ReleaseGroup string `json:"release_group,omitempty"`
 	SizeBytes    int64  `json:"size_bytes,omitempty"`
+	Seeders      int    `json:"seeders,omitempty"`
 	Snatched     bool   `json:"snatched,omitempty"`
 	Permalink    string `json:"permalink,omitempty"`
 	DownloadURL  string `json:"download_url,omitempty"`
@@ -108,6 +110,7 @@ func main() {
 	flag.DurationVar(&cfg.Backoff429, "backoff-429", cfg.Backoff429, "initial backoff for 429")
 	flag.DurationVar(&cfg.BackoffError, "backoff-error", cfg.BackoffError, "initial backoff for 400/500 class")
 	flag.DurationVar(&cfg.MaxBackoff, "max-backoff", cfg.MaxBackoff, "max backoff delay")
+	flag.IntVar(&cfg.MinSeeders, "min-seeders", cfg.MinSeeders, "minimum seeders required in output (0 disables)")
 	flag.StringVar(&queriesCSV, "queries", strings.Join(cfg.Queries, ","), "comma-separated preset names")
 	flag.Parse()
 
@@ -181,6 +184,9 @@ func main() {
 				if !isTargetCandidate(c) {
 					continue
 				}
+				if cfg.MinSeeders > 0 && c.Seeders < cfg.MinSeeders {
+					continue
+				}
 				key := candidateKey(c)
 				if key != "" && st.SeenTorrentIDs[key] {
 					continue
@@ -228,6 +234,7 @@ func defaultConfig() Config {
 		Backoff429:   2 * time.Minute,
 		BackoffError: 45 * time.Second,
 		MaxBackoff:   30 * time.Minute,
+		MinSeeders:   0,
 	}
 }
 
@@ -311,6 +318,9 @@ func validateConfig(cfg Config) error {
 	if cfg.HourlyCap <= 0 || cfg.DailyCap <= 0 {
 		return errors.New("hourly-cap and daily-cap must be > 0")
 	}
+	if cfg.MinSeeders < 0 {
+		return errors.New("min-seeders must be >= 0")
+	}
 	if cfg.MaxRetries <= 0 {
 		return errors.New("max-retries must be > 0")
 	}
@@ -329,6 +339,7 @@ func printPlan(cfg Config) {
 	fmt.Printf("queries=%s\n", strings.Join(cfg.Queries, ","))
 	fmt.Printf("max-pages=%d max-requests=%d\n", cfg.MaxPages, cfg.MaxRequests)
 	fmt.Printf("throttle min-interval=%s jitter<=%s hourly-cap=%d daily-cap=%d\n", cfg.MinInterval, cfg.Jitter, cfg.HourlyCap, cfg.DailyCap)
+	fmt.Printf("filter min-seeders=%d\n", cfg.MinSeeders)
 	fmt.Printf("state=%s output=%s\n", cfg.StatePath, cfg.OutputPath)
 	fmt.Println("send requests with: ApiUser + ApiKey headers")
 }
@@ -564,6 +575,7 @@ func extractCandidates(payload map[string]any, baseURL, query string, page int) 
 				Source:       pickString(tr, "Source", "source"),
 				ReleaseGroup: pickString(tr, "ReleaseGroup", "releasegroup", "release_group", "Scene", "scene"),
 				SizeBytes:    pickInt64(tr, "Size", "size", "SizeBytes", "size_bytes"),
+				Seeders:      pickInt(tr, "Seeders", "seeders", "SeederCount", "seeder_count", "NumSeeders", "num_seeders"),
 				Snatched:     pickBool(tr, "Snatched", "snatched"),
 			}
 			if c.GroupID > 0 {

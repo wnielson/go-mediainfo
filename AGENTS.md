@@ -20,6 +20,7 @@ Owner: soup
 
 ## Status (2026-02-11)
 - CI: green locally (`go test ./...`, `gofmt -w` clean).
+- PTP helper: `scripts/ptp_scan.go` supports `-min-seeders`; latest conservative scan (`4` requests, `35s` min interval) returned `13` candidates at `seeders>=10` to `.cache/ptp-scan/candidates.jsonl`.
 - Focused parity samples (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - TS `Nickelodeon - Generic Halloween Promo.ts`: diff `12` (down from `14` this pass; GOP JSON parity improved).
 - TS `Disney Channel - Evermoor Behind The Scenes.ts`: diff `25` (remaining: AC-3 stats/count windows).
