@@ -61,6 +61,11 @@ Owner: soup
 - `internal/mediainfo/mpeg_ts.go`: GOP field output now prefers `"Variable"` when parser flags variable GOP, before interlaced `M/N`.
 - `internal/mediainfo/mpeg2_video.go`: TS GOP variability now uses strict dominant-length threshold (`>=95%`) before collapsing to fixed length, preventing false Variable/Fixed flips on controls.
 - Validation sweep (19 files; Halloween TS controls + UHD M2TS samples): `improved=11 same=8 worse=0` vs previous `main` (`f4fda3a`) using official JSON as reference.
+- TS GOP cleanup:
+- `internal/mediainfo/mpeg_ts.go`: suppress `Gop_OpenClosed` / `Gop_OpenClosed_FirstFrame` when GOP is variable (official omits on variable-GOP samples).
+- Validation:
+- Halloween control set (13 TS): `improved=11 same=2 worse=0` vs previous commit (`0d1e7f7`), each improved file dropped by 2 keys.
+- New user-provided disc sample set (24 files across Excalibur/A.Beautiful.Mind/Ben-Hur/Infernal/Intruders/Network/Sabrina/The.Man.Who.Wasnt.There/Through.the.Looking.Glass/Zombeavers): `improved=0 same=24 worse=0` (no regressions).
 
 ## Learnings / Decisions
 - Command name: mediainfo

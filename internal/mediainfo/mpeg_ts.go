@@ -1066,11 +1066,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if info.ScanType == "Interlaced" && info.PictureStructure != "" {
 				fields = append(fields, Field{Name: "Format settings, Picture structure", Value: info.PictureStructure})
 			}
-			if info.GOPM > 0 && info.GOPN > 0 && info.GOPOpenClosed != "" {
+			if !info.GOPVariable && info.GOPM > 0 && info.GOPN > 0 && info.GOPOpenClosed != "" {
 				fields = append(fields, Field{Name: "GOP, Open/Closed", Value: info.GOPOpenClosed})
 				jsonExtras["Gop_OpenClosed"] = info.GOPOpenClosed
 			}
-			if info.GOPM > 0 && info.GOPN > 0 && info.GOPFirstClosed != "" {
+			if !info.GOPVariable && info.GOPM > 0 && info.GOPN > 0 && info.GOPFirstClosed != "" {
 				fields = append(fields, Field{Name: "GOP, Open/Closed of first frame", Value: info.GOPFirstClosed})
 				jsonExtras["Gop_OpenClosed_FirstFrame"] = info.GOPFirstClosed
 			}
