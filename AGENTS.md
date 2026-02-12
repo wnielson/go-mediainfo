@@ -40,9 +40,12 @@ Owner: soup
 - `.../David Bowie and the Story of Ziggy Stardust ... .ts` diff `107`.
 - `.../Now You See Me ... /BDMV/STREAM/00000.m2ts` diff `400`.
 - `.../Now You See Me ... /BDMV/PLAYLIST/00100.mpls` diff `27146`.
+- `.../Infernal.../STREAM/00000.m2ts` diff `272`; `.../PLAYLIST/00999.mpls` diff `13468`.
+- `.../Intruders.../STREAM/50201.m2ts` diff `507`; `.../PLAYLIST/00020.mpls` diff `6699`.
+- `.../Network.../STREAM/00007.m2ts` diff `214`; `.../PLAYLIST/00002.mpls` diff `1390`.
 - Continuous filename parity:
 - `detectContinuousFileSet` now includes sparse numeric sets (not just strict contiguous sequence) and picks highest numbered matching file.
-- `File_TestContinuousFileNames` default set to `true` (still overridable by `--File_TestContinuousFileNames=0`) to match official behavior on TS/BDAV naming sets.
+- `detectContinuousFileSet` sparse matching retained for explicit `--File_TestContinuousFileNames=1` flows; default remains off.
 
 ## Learnings / Decisions
 - Command name: mediainfo
