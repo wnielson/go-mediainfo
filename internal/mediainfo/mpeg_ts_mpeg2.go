@@ -16,11 +16,14 @@ func (s *dtvccState) feed(data []byte, services map[int]struct{}) {
 	}
 	for _, b := range data {
 		if s.remaining == 0 {
-			packetLen := int(b & 0x3F) // 6-bit packet_size
-			if packetLen == 0 {
-				continue
+			packetSizeCode := int(b & 0x3F) // 6-bit packet_size_code
+			// CEA-708 DTVCC packet payload size after the header byte:
+			// packet_size_code == 0 => 127 bytes, else (packet_size_code*2)-1 bytes.
+			if packetSizeCode == 0 {
+				s.remaining = 127
+			} else {
+				s.remaining = packetSizeCode*2 - 1
 			}
-			s.remaining = packetLen
 			s.buf = s.buf[:0]
 			continue
 		}

@@ -50,6 +50,13 @@ Owner: soup
 - Continuous filename parity:
 - `detectContinuousFileSet` now includes sparse numeric sets (not just strict contiguous sequence) and picks highest numbered matching file.
 - `detectContinuousFileSet` sparse matching retained for explicit `--File_TestContinuousFileNames=1` flows; default remains off.
+- TS caption parser parity win:
+- Fixed CEA-708 DTVCC packet payload sizing in `internal/mediainfo/mpeg_ts_mpeg2.go` (`packet_size_code` handling): payload bytes are `127` when code `0`, else `(code*2)-1`.
+- Validation (official `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- 71-file TS sweep (`keepalive/Halloween...`): `improved=6 same=65 worse=0`.
+- Largest wins: `New Thursdays 169->144`, `Generic Week of Eeek 135->99`, `Regular Show IV Promo 130->94`.
+- Control set unchanged: `Nick=41`, `Evermoor=45`, `01007.m2ts=31`, `01099.m2ts=20`, `KAUTOKEINO 00007.m2ts=55`.
+- Remaining 708 mismatch in this sweep: `Halloweentown Be Right Back.ts` (official none vs ours service `2`).
 
 ## Learnings / Decisions
 - Command name: mediainfo
