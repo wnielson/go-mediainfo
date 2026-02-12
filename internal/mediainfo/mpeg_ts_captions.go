@@ -59,7 +59,7 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 		}
 		*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-608", "CC1", startCommand, emitLinesCount))
 	}
-	if video.ccEven.found {
+	if shouldEmitTSCC3(video) {
 		startCommand := 0.0
 		if fps > 0 && video.ccEven.firstCommandPTS != 0 {
 			ptsSec := float64(video.ccEven.firstCommandPTS) / 90000.0
@@ -86,6 +86,20 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 			*out = append(*out, buildTSCaptionStream(videoPID, menuID, delay, duration, "EIA-708", strconv.Itoa(svc), 0, emitLinesCount))
 		}
 	}
+}
+
+func shouldEmitTSCC3(video *tsStream) bool {
+	if video == nil || !video.ccEven.found {
+		return false
+	}
+	if video.ccEven.firstCommandPTS != 0 || video.ccEven.firstCommandFrame > 0 {
+		return true
+	}
+	// Without any DTVCC services, keep legacy CC3 fallback when a display type was detected.
+	if len(video.dtvccServices) == 0 && video.ccEven.firstType != "" {
+		return true
+	}
+	return false
 }
 
 func buildTSCaptionStream(videoPID uint16, programNumber uint16, delaySeconds float64, duration float64, format string, service string, startCommandSeconds float64, emitLinesCount bool) Stream {
