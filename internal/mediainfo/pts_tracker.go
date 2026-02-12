@@ -49,6 +49,45 @@ func (t *ptsTracker) add(pts uint64) {
 	}
 }
 
+func (t *ptsTracker) addTextPTS(pts uint64) {
+	// Text streams (notably BDAV PGS) can have slightly non-monotonic PTS even in file order.
+	// MediaInfo behavior aligns closer to treating the last seen PTS as the track end, rather than
+	// keeping the maximum PTS across a small reordering window.
+	const reorderMax = 2 * 90000 // 2 seconds
+
+	if !t.ok {
+		t.first = pts
+		t.min = pts
+		t.max = pts
+		t.last = pts
+		t.segmentStart = pts
+		t.ok = true
+		return
+	}
+	if pts < t.last {
+		backward := t.last - pts
+		if backward > reorderMax {
+			segment := ptsDelta(t.segmentStart, t.last)
+			t.segmentTotal += segment
+			if segment > 0 {
+				t.lastNonZero = segment
+			}
+			t.segmentStart = pts
+			t.resets++
+		}
+		// Accept small reordering as-is for text: last should reflect the last seen PTS.
+		t.last = pts
+	} else {
+		t.last = pts
+	}
+	if pts < t.min {
+		t.min = pts
+	}
+	if pts > t.max {
+		t.max = pts
+	}
+}
+
 func (t *ptsTracker) breakSegment(start uint64) {
 	if !t.ok {
 		t.add(start)

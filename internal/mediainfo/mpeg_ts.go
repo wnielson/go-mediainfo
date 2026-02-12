@@ -290,6 +290,15 @@ func addPTSMode(t *ptsTracker, pts uint64, breakOnGap bool) {
 	t.add(pts)
 }
 
+func addPTSTextMode(t *ptsTracker, pts uint64, breakOnGap bool) {
+	if breakOnGap && t.has() && pts > t.last && (pts-t.last) > tsPTSGap {
+		t.breakSegment(pts)
+		return
+	}
+	// Like addPTSMode, but for text we want last=last-seen even with slight reordering.
+	t.addTextPTS(pts)
+}
+
 func findTSSyncOffset(file io.ReadSeeker, packetSize int64, tsOffset int64, size int64) (int64, bool) {
 	// Some TS/M2TS files have leading junk bytes and are not packet-aligned at offset 0.
 	// Find the first offset where multiple consecutive packets have the 0x47 sync byte.
@@ -639,7 +648,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						if pts, ok := parsePTS(payload[9:]); ok {
 							addPTSMode(&anyPTS, pts, !partialScan)
 							if entry, ok := streams[pid]; ok {
-								addPTSMode(&entry.pts, pts, !partialScan)
+								if entry.kind == StreamText {
+									addPTSTextMode(&entry.pts, pts, !partialScan)
+								} else {
+									addPTSMode(&entry.pts, pts, !partialScan)
+								}
 								entry.lastPTS = pts
 								entry.hasLastPTS = true
 								entry.seenPTS = true
@@ -1102,8 +1115,18 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 		if isBDAV && st.kind == StreamText && st.pts.has() {
 			// MediaInfo reports Duration for BDAV PGS text streams.
-			// Prefer raw PTS span (max-min) even if PTS has discontinuities.
-			if d := st.pts.duration(); d > 0 {
+			// Prefer first/last (not min/max) to avoid being skewed by small non-monotonic PTS.
+			d := 0.0
+			if st.pts.hasResets() {
+				d = st.pts.durationTotal()
+			} else {
+				first := st.pts.first
+				last := st.pts.last
+				if last > first {
+					d = float64(ptsDelta(first, last)) / 90000.0
+				}
+			}
+			if d > 0 {
 				jsonExtras["Duration"] = fmt.Sprintf("%.3f", d)
 			}
 		}
