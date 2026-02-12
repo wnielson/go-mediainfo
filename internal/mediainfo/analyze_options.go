@@ -8,7 +8,7 @@ type AnalyzeOptions struct {
 }
 
 func defaultAnalyzeOptions() AnalyzeOptions {
-	return AnalyzeOptions{ParseSpeed: 0.5, TestContinuousFileNames: false}
+	return AnalyzeOptions{ParseSpeed: 0.5, TestContinuousFileNames: true}
 }
 
 func normalizeAnalyzeOptions(opts AnalyzeOptions) AnalyzeOptions {
@@ -16,7 +16,7 @@ func normalizeAnalyzeOptions(opts AnalyzeOptions) AnalyzeOptions {
 		opts.ParseSpeed = 0.5
 	}
 	if !opts.HasTestContinuousFileNames {
-		opts.TestContinuousFileNames = false
+		opts.TestContinuousFileNames = true
 	}
 	if opts.ParseSpeed < 0 {
 		opts.ParseSpeed = 0

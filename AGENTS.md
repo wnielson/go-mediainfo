@@ -35,6 +35,15 @@ Owner: soup
 - TS/BDAV AC-3 stats parity (`compr_*`/`dynrng_*` counts + averaging windows).
 - BDAV/TS tiny General vs Video `StreamSize` byte-allocation parity (1-3 byte deltas).
 
+## Status (2026-02-12)
+- New samples checked:
+- `.../David Bowie and the Story of Ziggy Stardust ... .ts` diff `107`.
+- `.../Now You See Me ... /BDMV/STREAM/00000.m2ts` diff `400`.
+- `.../Now You See Me ... /BDMV/PLAYLIST/00100.mpls` diff `27146`.
+- Continuous filename parity:
+- `detectContinuousFileSet` now includes sparse numeric sets (not just strict contiguous sequence) and picks highest numbered matching file.
+- `File_TestContinuousFileNames` default set to `true` (still overridable by `--File_TestContinuousFileNames=0`) to match official behavior on TS/BDAV naming sets.
+
 ## Learnings / Decisions
 - Command name: mediainfo
 - Parity target: MediaInfo-master in this repo
