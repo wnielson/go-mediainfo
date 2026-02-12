@@ -29,6 +29,7 @@ type tsStream struct {
 	hasAC3              bool
 	ac3Info             ac3Info
 	ac3Stats            ac3Info
+	ac3StatsComprHead   uint32
 	ac3Head             []ac3Info
 	ac3Tail             []ac3Info
 	ac3TailPos          int
@@ -69,18 +70,21 @@ type tsStream struct {
 	// Same as audioFramesStats, but counted only from the initial (head) scan window. MediaInfoLib
 	// bases the 0.75*N+4 sampling size on the first pass, even if it later scans from the end.
 	audioFramesStatsHead uint64
-	audioSpf             int
-	audioBitRateKbps     int64
-	audioBitRateMode     string
-	dtsHD                bool
-	hasTrueHD            bool
-	videoFrameRate       float64
-	pesData              []byte
-	audioBuffer          []byte
-	audioStarted         bool
-	videoStarted         bool
-	writingLibrary       string
-	encoding             string
+	// Upper bound for bounded ParseSpeed AC-3/E-AC-3 stats sampling. Set after the head scan once
+	// we know how many frames were observed at the beginning of the file.
+	audioFramesStatsMax uint64
+	audioSpf            int
+	audioBitRateKbps    int64
+	audioBitRateMode    string
+	dtsHD               bool
+	hasTrueHD           bool
+	videoFrameRate      float64
+	pesData             []byte
+	audioBuffer         []byte
+	audioStarted        bool
+	videoStarted        bool
+	writingLibrary      string
+	encoding            string
 	// MPEG-2 GA94 caption user data is reordered by temporal_reference in MediaInfoLib before
 	// feeding the DTVCC/XDS parsers. We keep a small per-GOP buffer for XDS only.
 	mpeg2CurTemporalReference uint16
@@ -759,8 +763,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						inHead := !ac3StatsBounded || packetOffset < headEnd
 						// MediaInfoLib samples AC-3 metadata from both begin/end windows at default
 						// ParseSpeed, with stats emission still gated on a valid timeline.
-						collectAC3Stats := inHead && (!ac3StatsBounded || entry.seenPTS)
-						if !inHead && ac3StatsBounded && entry.seenPTS {
+						statsTimelineOK := !ac3StatsBounded || entry.seenPTS
+						collectAC3Stats := inHead && statsTimelineOK
+						if !inHead && ac3StatsBounded && statsTimelineOK {
 							collectAC3Stats = true
 						}
 						// Audio frames can be recovered mid-PES by resyncing on codec sync words.
@@ -805,13 +810,18 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					// Like MediaInfoLib, avoid parsing audio mid-PES before we've seen a PES start
 					// for that PID, otherwise we may resync on false-positive AC-3 sync words and
 					// skew stats vs official output.
-					if !entry.audioStarted {
-						continue
-					}
 					headEnd := syncOff + ac3StatsHeadBytes
 					inHead := !ac3StatsBounded || packetOffset < headEnd
-					collectAC3Stats := inHead && (!ac3StatsBounded || entry.seenPTS)
-					if !inHead && ac3StatsBounded && entry.seenPTS {
+					if !entry.audioStarted {
+						// BDAV tail window can start mid-PES; allow resync there to avoid missing
+						// a small number of frames vs MediaInfoLib's end-window scan.
+						if !(isBDAV && ac3StatsBounded && !inHead) {
+							continue
+						}
+					}
+					statsTimelineOK := !ac3StatsBounded || entry.seenPTS
+					collectAC3Stats := inHead && statsTimelineOK
+					if !inHead && ac3StatsBounded && statsTimelineOK {
 						collectAC3Stats = true
 					}
 					entry.bytes += uint64(len(payloadData))
@@ -845,6 +855,34 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	}
 	if !scanRange(headStart, headEnd, ac3StatsBounded) {
 		return ContainerInfo{}, nil, nil, false
+	}
+	if ac3StatsBounded {
+		const headThreshold = 256
+		for _, st := range streams {
+			if st == nil || !st.hasAC3 {
+				continue
+			}
+			if !st.ac3Stats.dynrngeSeen {
+				if st.ac3StatsComprHead < headThreshold {
+					st.audioFramesStatsMax = 0
+				} else {
+					st.audioFramesStatsMax = st.audioFramesStatsHead
+				}
+				continue
+			}
+			headFrames := st.audioFramesStatsHead
+			if headFrames < headThreshold {
+				st.audioFramesStatsMax = 0
+				continue
+			}
+			max := headFrames + headFrames/4
+			max -= headFrames / 50
+			max--
+			if max < headFrames {
+				max = headFrames
+			}
+			st.audioFramesStatsMax = max
+		}
 	}
 	headEndActual := headEnd
 	if headScannedEnd > 0 {
@@ -939,6 +977,12 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 	}
 
+	if ac3StatsBounded {
+		for _, st := range streams {
+			finalizeBoundedAC3Stats(st)
+		}
+	}
+
 	streamOrder = normalizeTSStreamOrder(streamOrder, streams, isBDAV)
 
 	var streamsOut []Stream
@@ -976,11 +1020,19 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		if st.programNumber > 0 {
 			jsonExtras["MenuID"] = strconv.FormatUint(uint64(st.programNumber), 10)
 		}
-		// MediaInfoLib does not emit Delay/Video_Delay for BDAV PGS streams.
-		if st.pts.has() && !(isBDAV && st.kind == StreamText) {
-			delay := float64(st.pts.first) / 90000.0
-			jsonExtras["Delay"] = fmt.Sprintf("%.9f", delay)
-			jsonExtras["Delay_Source"] = "Container"
+		// BDAV PGS delay parity: MediaInfo emits Delay/Video_Delay for HDMV 0x90 (PGS), but not 0x91.
+		if st.pts.has() {
+			if isBDAV && st.kind == StreamText {
+				if st.streamType == 0x90 && st.pts.first > 0 {
+					delay := float64(st.pts.first) / 90000.0
+					jsonExtras["Delay"] = fmt.Sprintf("%.9f", delay)
+					jsonExtras["Delay_Source"] = "Container"
+				}
+			} else {
+				delay := float64(st.pts.first) / 90000.0
+				jsonExtras["Delay"] = fmt.Sprintf("%.9f", delay)
+				jsonExtras["Delay_Source"] = "Container"
+			}
 		}
 		if st.kind == StreamAudio && videoPTS.has() && st.pts.has() {
 			// Match MediaInfo: Video_Delay is computed from millisecond-rounded stream delays.
@@ -990,12 +1042,17 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			videoDelay = math.Round(videoDelay*1000) / 1000
 			jsonExtras["Video_Delay"] = fmt.Sprintf("%.3f", audioDelay-videoDelay)
 		}
-		if st.kind == StreamText && !isBDAV && videoPTS.has() && st.pts.has() {
-			textDelay := float64(st.pts.first) / 90000.0
-			videoDelay := float64(videoPTS.first) / 90000.0
-			textDelay = math.Round(textDelay*1000) / 1000
-			videoDelay = math.Round(videoDelay*1000) / 1000
-			jsonExtras["Video_Delay"] = fmt.Sprintf("%.3f", textDelay-videoDelay)
+		if st.kind == StreamText && videoPTS.has() && st.pts.has() {
+			if !isBDAV || st.streamType == 0x90 {
+				textDelay := float64(st.pts.first) / 90000.0
+				videoDelay := float64(videoPTS.first) / 90000.0
+				textDelay = math.Round(textDelay*1000) / 1000
+				videoDelay = math.Round(videoDelay*1000) / 1000
+				delta := textDelay - videoDelay
+				if delta != 0 {
+					jsonExtras["Video_Delay"] = fmt.Sprintf("%.3f", delta)
+				}
+			}
 		}
 		if st.kind == StreamVideo && st.height > 0 {
 			storedHeight := st.storedHeight
@@ -1025,7 +1082,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					if st.h264SPS.HasBitRate && st.h264SPS.BitRate > 0 {
 						jsonExtras["BitRate_Maximum"] = strconv.FormatInt(st.h264SPS.BitRate, 10)
 					}
-					if st.h264SPS.HasBufferSize && st.h264SPS.BufferSize > 0 {
+					if st.h264SPS.HasBufferSizeNAL && st.h264SPS.HasBufferSizeVCL && st.h264SPS.BufferSizeNAL > 0 && st.h264SPS.BufferSizeVCL > 0 {
+						jsonExtras["BufferSize"] = fmt.Sprintf("%d / %d", st.h264SPS.BufferSizeNAL, st.h264SPS.BufferSizeVCL)
+					} else if st.h264SPS.HasBufferSize && st.h264SPS.BufferSize > 0 {
 						jsonExtras["BufferSize"] = strconv.FormatInt(st.h264SPS.BufferSize, 10)
 					}
 					if st.h264SPS.HasColorRange || st.h264SPS.HasColorDescription {
@@ -2478,9 +2537,12 @@ func consumeDTS(entry *tsStream, payload []byte) {
 
 const ac3SampleMax = 512
 
-func pushAC3Sample(entry *tsStream, info ac3Info) {
-	if len(entry.ac3Head) < ac3SampleMax {
-		entry.ac3Head = append(entry.ac3Head, info)
+func pushAC3Sample(entry *tsStream, info ac3Info, head bool) {
+	if head {
+		if len(entry.ac3Head) < ac3SampleMax {
+			entry.ac3Head = append(entry.ac3Head, info)
+		}
+		return
 	}
 	if !entry.ac3TailFull {
 		entry.ac3Tail = append(entry.ac3Tail, info)
@@ -2527,6 +2589,20 @@ func consumeAC3(entry *tsStream, payload []byte, collectStats bool, statsHead bo
 			i++
 			continue
 		}
+		// Guard against rare false-positive resyncs: once we have a stable stream profile,
+		// reject frames that don't match it.
+		if entry.ac3Info.sampleRate > 0 && info.sampleRate > 0 && info.sampleRate != entry.ac3Info.sampleRate {
+			i++
+			continue
+		}
+		if entry.ac3Info.bsid > 0 && info.bsid > 0 && info.bsid != entry.ac3Info.bsid {
+			i++
+			continue
+		}
+		if entry.ac3Info.acmod > 0 && info.acmod > 0 && info.acmod != entry.ac3Info.acmod {
+			i++
+			continue
+		}
 		if i+frameSize > len(entry.audioBuffer) {
 			break
 		}
@@ -2547,6 +2623,16 @@ func consumeAC3(entry *tsStream, payload []byte, collectStats bool, statsHead bo
 		entry.ac3Info.mergeFrameBase(info)
 		if collectStats {
 			entry.ac3Stats.mergeFrame(info)
+			if statsBounded {
+				pushAC3Sample(entry, info, statsHead)
+				entry.audioFramesStats++
+				if statsHead {
+					entry.audioFramesStatsHead++
+					if info.compre && info.comprCode != 0xFF {
+						entry.ac3StatsComprHead++
+					}
+				}
+			}
 		}
 		if !entry.hasAudioInfo && info.sampleRate > 0 {
 			entry.audioRate = info.sampleRate
@@ -2597,6 +2683,16 @@ func consumeEAC3(entry *tsStream, payload []byte, collectStats bool, statsHead b
 		entry.ac3Info.mergeFrameBase(info)
 		if collectStats {
 			entry.ac3Stats.mergeFrame(info)
+			if statsBounded {
+				pushAC3Sample(entry, info, statsHead)
+				entry.audioFramesStats++
+				if statsHead {
+					entry.audioFramesStatsHead++
+					if info.compre && info.comprCode != 0xFF {
+						entry.ac3StatsComprHead++
+					}
+				}
+			}
 		}
 		if !entry.hasAudioInfo && info.sampleRate > 0 {
 			entry.audioRate = info.sampleRate
@@ -2616,26 +2712,58 @@ func finalizeBoundedAC3Stats(entry *tsStream) {
 	if entry == nil || !entry.hasAC3 {
 		return
 	}
+	// Only override stats when dynrng metadata exists. For compr-only streams, the current
+	// incremental stats behavior matches MediaInfo better than fixed sampling.
+	if !entry.ac3Stats.dynrngeSeen {
+		return
+	}
+	if entry.audioFramesStatsMax == 0 {
+		return
+	}
 	head := entry.ac3Head
 	tail := orderedAC3Tail(entry)
 	if len(head) == 0 && len(tail) == 0 {
 		return
 	}
-	// MediaInfo scans begin/end windows at default ParseSpeed. To avoid biasing stats to only one
-	// window, split the capped sample budget across head and tail (tail = end of file).
-	want := ac3SampleMax
-	headMax := want / 2
-	takeHead := min(len(head), headMax)
-	takeTail := min(len(tail), want-takeHead)
-	if need := want - (takeHead + takeTail); need > 0 {
-		takeHead += min(len(head)-takeHead, need)
+	want := int(entry.audioFramesStatsMax)
+	if want <= 0 {
+		return
 	}
-	samples := make([]ac3Info, 0, takeHead+takeTail)
+	if want > ac3SampleMax*2 {
+		want = ac3SampleMax * 2
+	}
+	if want > len(head)+len(tail) {
+		want = len(head) + len(tail)
+	}
+	takeHead := min(len(head), want)
+	tailBudget := want - takeHead
+	headStart := 0
+	// MediaInfoLib's TS/BDAV demux can begin mid-frame; if the very first frames in the head
+	// window don't carry compr metadata, shift a couple of frames from head to tail.
+	if takeHead == len(head) && takeHead >= 2 && tailBudget+2 <= len(tail) {
+		const headSkip = 2
+		validInSkipped := 0
+		for i := 0; i < headSkip; i++ {
+			if head[i].compre && head[i].comprCode != 0xFF {
+				validInSkipped++
+			}
+		}
+		if validInSkipped == 0 {
+			takeHead -= headSkip
+			tailBudget += headSkip
+			headStart = headSkip
+		}
+	}
+	samples := make([]ac3Info, 0, want)
 	if takeHead > 0 {
-		samples = append(samples, head[:takeHead]...)
+		samples = append(samples, head[headStart:headStart+takeHead]...)
 	}
-	if takeTail > 0 {
-		samples = append(samples, tail[len(tail)-takeTail:]...)
+	if tailBudget > 0 && len(tail) > 0 {
+		// Bias tail stats to the end of the file, matching MediaInfoLib's end-window scan behavior.
+		if tailBudget > len(tail) {
+			tailBudget = len(tail)
+		}
+		samples = append(samples, tail[len(tail)-tailBudget:]...)
 	}
 	if len(samples) == 0 {
 		return

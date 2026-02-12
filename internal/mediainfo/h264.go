@@ -36,6 +36,10 @@ type h264SPSInfo struct {
 	HasBitRateCBR           bool
 	BufferSize              int64
 	HasBufferSize           bool
+	BufferSizeNAL           int64
+	HasBufferSizeNAL        bool
+	BufferSizeVCL           int64
+	HasBufferSizeVCL        bool
 }
 
 func parseAVCConfig(payload []byte) (string, []Field, h264SPSInfo) {
@@ -188,6 +192,10 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	hasBitRateCBR := false
 	bufferSize := int64(0)
 	hasBufferSize := false
+	bufferSizeNAL := int64(0)
+	hasBufferSizeNAL := false
+	bufferSizeVCL := int64(0)
+	hasBufferSizeVCL := false
 
 	if isHighProfile(profileID) {
 		chromaFormat = br.readUE()
@@ -350,6 +358,8 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 					hasBitRateCBR = true
 				}
 				if hrdBuffer > 0 {
+					bufferSizeNAL = hrdBuffer
+					hasBufferSizeNAL = true
 					bufferSize = hrdBuffer
 					hasBufferSize = true
 				}
@@ -365,8 +375,13 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 					hasBitRateCBR = true
 				}
 				if hrdBuffer > 0 && !hasBufferSize {
+					bufferSizeVCL = hrdBuffer
+					hasBufferSizeVCL = true
 					bufferSize = hrdBuffer
 					hasBufferSize = true
+				} else if hrdBuffer > 0 {
+					bufferSizeVCL = hrdBuffer
+					hasBufferSizeVCL = true
 				}
 			}
 		}
@@ -406,6 +421,10 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		HasBitRateCBR:           hasBitRateCBR,
 		BufferSize:              bufferSize,
 		HasBufferSize:           hasBufferSize,
+		BufferSizeNAL:           bufferSizeNAL,
+		HasBufferSizeNAL:        hasBufferSizeNAL,
+		BufferSizeVCL:           bufferSizeVCL,
+		HasBufferSizeVCL:        hasBufferSizeVCL,
 	}
 	info.ChromaFormat = chromaFormatString(chromaFormat)
 	return info

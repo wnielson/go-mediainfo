@@ -246,10 +246,15 @@ Owner: soup
 - Loop-to-done: no “continue?” prompts. Run parity/bench cycles until 1:1 vs official + tests green.
 - IO: avoid full-dataset sweeps on `/mnt/storage/torrents*`; sample a few files per type; stop runaway jobs fast.
 
-- Status (2026-02-11):
+- Status (2026-02-12):
 - Parity snapshot (`mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - TS: `Nickelodeon - Halloween Bumper 2.ts` diff=0, `Evermoor Behind The Scenes.ts` diff=25 (mostly AC-3 stats).
-- BDAV/M2TS: `01099.m2ts` diff=4 (2-byte General/Video `StreamSize` split), `01007.m2ts` diff improved `44 -> 8`.
+- BDAV/M2TS: AC-3 bounded stats parity now 1:1 on local control set:
+- `Static.2012.../STREAM/00004.m2ts` diff=0
+- `A.Bras.Ouverts.../STREAM/00001.m2ts` diff=0
+- `Intruders.../STREAM/50258.m2ts` diff=0
+- AC-3: fix dual-mono (1+1) BSI parsing alignment (dialnorm2/compr2/langcod2/audprodi2 fields) to match MediaInfoLib.
+- AC-3 bounded stats: shift 2 earliest head frames into tail budget when the first head frames lack `compr` metadata (matches MediaInfoLib on BDAV edge cases).
 - BDAV TrueHD bridge landed: detect TrueHD sync in 0x83-style streams; emit `Format=MLP FBA`, `MuxingMode=Stream extension`, TrueHD channel layout/positions + max bitrate while keeping AC-3 core extras.
 - BDAV DTS fallback landed: infer DTS on 0x11xx audio PIDs when PMT is missing and parse core DTS fields (`channels/sampling/framecount/codec id`) with DTS-HD extension detection for JSON mode/commercial fields.
 - BDAV AVC parity tweak landed: `BitRate_Maximum`/`BufferSize` now branch by detected audio family (`TrueHD=38999808 + dual buffer`, `DTS=35000000 + single buffer`, fallback unchanged).

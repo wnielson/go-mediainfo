@@ -188,14 +188,7 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	if !ok {
 		return info, 0, false
 	}
-	if acmod == 0 {
-		if _, ok = br.readBits(2); !ok {
-			return info, 0, false
-		}
-		if _, ok = br.readBits(2); !ok {
-			return info, 0, false
-		}
-	} else {
+	if acmod != 0 {
 		// acmod==1 is mono (C); it does not carry cmixlev. Reading it would shift the bitstream
 		// and corrupt downstream fields (e.g. lfeon/dialnorm/compr), which breaks TS parity.
 		if acmod&1 != 0 && acmod != 1 {
@@ -242,6 +235,12 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	info.dialnormSum = math.Pow(10.0, float64(info.dialnorm)/10.0)
 	info.dialnormMin = info.dialnorm
 	info.dialnormMax = info.dialnorm
+	if acmod == 0 {
+		// Dual-mono (1+1): dialnorm2 is present before compre/compr.
+		if _, ok := br.readBits(5); !ok {
+			return info, 0, false
+		}
+	}
 	compre, ok := br.readBits(1)
 	if !ok {
 		return info, 0, false
@@ -258,6 +257,27 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		info.hasCompr = true
 		info.comprDB = info.comprFieldDB
 	}
+	if acmod == 0 {
+		// Dual-mono: optional compr2 follows. Use it for stats if compr1 is absent.
+		compr2e, ok := br.readBits(1)
+		if !ok {
+			return info, 0, false
+		}
+		if compr2e == 1 {
+			compr2, ok := br.readBits(8)
+			if !ok {
+				return info, 0, false
+			}
+			if !info.compre {
+				info.compre = true
+				info.comprCode = uint8(compr2)
+				info.comprFieldDB = ac3ComprDB(uint8(compr2))
+				info.hasComprField = true
+				info.hasCompr = true
+				info.comprDB = info.comprFieldDB
+			}
+		}
+	}
 	langcode, ok := br.readBits(1)
 	if !ok {
 		return info, 0, false
@@ -265,6 +285,18 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 	if langcode == 1 {
 		if _, ok = br.readBits(8); !ok {
 			return info, 0, false
+		}
+	}
+	if acmod == 0 {
+		// Dual-mono: optional language code for channel 2.
+		langcode2, ok := br.readBits(1)
+		if !ok {
+			return info, 0, false
+		}
+		if langcode2 == 1 {
+			if _, ok = br.readBits(8); !ok {
+				return info, 0, false
+			}
 		}
 	}
 	audprodie, ok := br.readBits(1)
@@ -285,6 +317,21 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 		if value, ok := ac3RoomType(roomtyp); ok {
 			info.roomtyp = value
 			info.hasRoomtyp = true
+		}
+	}
+	if acmod == 0 {
+		// Dual-mono: optional audio production info for channel 2.
+		audprodi2e, ok := br.readBits(1)
+		if !ok {
+			return info, 0, false
+		}
+		if audprodi2e == 1 {
+			if _, ok := br.readBits(5); !ok {
+				return info, 0, false
+			}
+			if _, ok := br.readBits(2); !ok {
+				return info, 0, false
+			}
 		}
 	}
 	if _, ok := br.readBits(1); !ok { // copyrightb
