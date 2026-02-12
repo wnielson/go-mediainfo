@@ -370,8 +370,14 @@ func buildJSONComputedFields(kind StreamKind, fields []jsonKV, containerFormat s
 		if channels != "" && jsonFieldValue(fields, "ChannelPositions") == "" {
 			// Official mediainfo does not emit ChannelPositions for MPEG Audio in MPEG-PS (e.g. VOB).
 			if !(containerFormat == "MPEG-PS" && format == "MPEG Audio") {
-				if pos := channelPositionsFromCount(channels); pos != "" {
-					out = append(out, jsonKV{Key: "ChannelPositions", Val: pos})
+				// For MPEG-TS/BDAV, MediaInfo often omits ChannelPositions when ChannelLayout isn't known
+				// (e.g. DTS-HD ExSS without a speaker mask). Avoid synthesizing positions in that case.
+				if (containerFormat == "MPEG-TS" || containerFormat == "BDAV") && jsonFieldValue(fields, "ChannelLayout") == "" {
+					// no-op
+				} else {
+					if pos := channelPositionsFromCount(channels); pos != "" {
+						out = append(out, jsonKV{Key: "ChannelPositions", Val: pos})
+					}
 				}
 			}
 		}
