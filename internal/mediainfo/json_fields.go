@@ -354,8 +354,10 @@ func buildJSONComputedFields(kind StreamKind, fields []jsonKV, containerFormat s
 			frameCount := int(math.Round(duration * frameRate))
 			out = append(out, jsonKV{Key: "FrameCount", Val: strconv.Itoa(frameCount)})
 		}
-		// MediaInfo doesn't emit FrameRate_Num/Den for Matroska; keep this for MPEG-4 only.
-		if containerFormat == "MPEG-4" && jsonFieldValue(fields, "FrameRate_Num") == "" && jsonFieldValue(fields, "FrameRate_Den") == "" {
+		// MediaInfo emits FrameRate_Num/Den for some containers even when the displayed frame rate
+		// field lacks a "(num/den)" hint (e.g. BDAV and MPEG-TS).
+		if (containerFormat == "MPEG-4" || containerFormat == "MPEG-TS" || containerFormat == "BDAV") &&
+			jsonFieldValue(fields, "FrameRate_Num") == "" && jsonFieldValue(fields, "FrameRate_Den") == "" {
 			num, den := rationalizeFrameRate(frameRate)
 			if num > 0 && den > 0 {
 				out = append(out, jsonKV{Key: "FrameRate_Num", Val: strconv.Itoa(num)})
