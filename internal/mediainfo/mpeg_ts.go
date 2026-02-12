@@ -125,13 +125,41 @@ func normalizeTSStreamOrder(order []uint16, streams map[uint16]*tsStream, isBDAV
 	if !isBDAV {
 		return normalized
 	}
+
+	// BDAV ordering: MediaInfo tends to place the "main" video stream first, then audio/text,
+	// with secondary video streams (e.g., Dolby Vision enhancement/PiP) after the others.
+	primaryVideoPID := uint16(0)
+	var primaryVideoBytes uint64
+	for _, pid := range normalized {
+		st := streams[pid]
+		if st == nil || st.kind != StreamVideo {
+			continue
+		}
+		if primaryVideoPID == 0 || st.bytes > primaryVideoBytes {
+			primaryVideoPID = pid
+			primaryVideoBytes = st.bytes
+		}
+	}
+	if primaryVideoPID == 0 {
+		for _, pid := range normalized {
+			st := streams[pid]
+			if st != nil && st.kind == StreamVideo {
+				primaryVideoPID = pid
+				break
+			}
+		}
+	}
+
 	priority := func(st *tsStream) int {
 		if st == nil {
 			return 4
 		}
 		switch st.kind {
 		case StreamVideo:
-			return 0
+			if st.pid == primaryVideoPID {
+				return 0
+			}
+			return 4
 		case StreamAudio:
 			return 1
 		case StreamText:
