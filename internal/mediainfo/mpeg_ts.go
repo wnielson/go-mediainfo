@@ -39,24 +39,27 @@ type tsStream struct {
 	mpeg2Parser         *mpeg2VideoParser
 	mpeg2Info           mpeg2VideoInfo
 	hasMPEG2Info        bool
-	videoCCCarry        []byte
-	videoFrameCount     int
-	ccFound             bool
-	ccOdd               ccTrack
-	ccEven              ccTrack
-	dtvcc               dtvccState
-	dtvccServices       map[int]struct{}
-	language            string
-	videoFields         []Field
-	hasVideoFields      bool
-	audioProfile        string
-	audioObject         int
-	audioMPEGVersion    int
-	audioRate           float64
-	audioChannels       uint64
-	audioBitDepth       int
-	hasAudioInfo        bool
-	audioFrames         uint64
+	// AVC/H.264 SPS info for TS/BDAV streams (used for JSON extras like colour_primaries and HRD).
+	h264SPS          h264SPSInfo
+	hasH264SPS       bool
+	videoCCCarry     []byte
+	videoFrameCount  int
+	ccFound          bool
+	ccOdd            ccTrack
+	ccEven           ccTrack
+	dtvcc            dtvccState
+	dtvccServices    map[int]struct{}
+	language         string
+	videoFields      []Field
+	hasVideoFields   bool
+	audioProfile     string
+	audioObject      int
+	audioMPEGVersion int
+	audioRate        float64
+	audioChannels    uint64
+	audioBitDepth    int
+	hasAudioInfo     bool
+	audioFrames      uint64
 	// Number of parsed AC-3/E-AC-3 frames that contributed to metadata stats sampling (bounded by
 	// MediaInfoLib ParseSpeed window logic).
 	audioFramesStats uint64
@@ -908,18 +911,21 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			continue
 		}
 		var fields []Field
+		var sps h264SPSInfo
 		var width uint64
 		var height uint64
 		var storedHeight uint64
 		var fps float64
 		if packetSize == 192 {
-			fields, width, height, storedHeight, fps = scanBDAVForH264(file, entry.pid, size)
+			fields, sps, width, height, storedHeight, fps = scanBDAVForH264(file, entry.pid, size)
 		} else {
-			fields, width, height, storedHeight, fps = scanTSForH264(file, entry.pid, size)
+			fields, sps, width, height, storedHeight, fps = scanTSForH264(file, entry.pid, size)
 		}
 		if len(fields) > 0 {
 			entry.videoFields = fields
 			entry.hasVideoFields = true
+			entry.h264SPS = sps
+			entry.hasH264SPS = true
 			entry.width = width
 			entry.height = height
 			if storedHeight > 0 {
@@ -1014,15 +1020,46 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				if _, ok := jsonRaw["extra"]; !ok {
 					jsonRaw["extra"] = "{\"format_identifier\":\"HDMV\"}"
 				}
-				if hasTrueHDAudio {
-					jsonExtras["BitRate_Maximum"] = "38999808"
-					jsonExtras["BufferSize"] = "30000000 / 30000000"
-				} else if hasDTSAudio {
-					jsonExtras["BitRate_Maximum"] = "35000000"
-					jsonExtras["BufferSize"] = "30000000"
+				// Prefer bitstream HRD/VUI metadata when available (matches official mediainfo).
+				if st.hasH264SPS {
+					if st.h264SPS.HasBitRate && st.h264SPS.BitRate > 0 {
+						jsonExtras["BitRate_Maximum"] = strconv.FormatInt(st.h264SPS.BitRate, 10)
+					}
+					if st.h264SPS.HasBufferSize && st.h264SPS.BufferSize > 0 {
+						jsonExtras["BufferSize"] = strconv.FormatInt(st.h264SPS.BufferSize, 10)
+					}
+					if st.h264SPS.HasColorRange || st.h264SPS.HasColorDescription {
+						jsonExtras["colour_description_present"] = "Yes"
+						jsonExtras["colour_description_present_Source"] = "Stream"
+						if st.h264SPS.ColorRange != "" {
+							jsonExtras["colour_range"] = st.h264SPS.ColorRange
+							jsonExtras["colour_range_Source"] = "Stream"
+						}
+						if st.h264SPS.ColorPrimaries != "" {
+							jsonExtras["colour_primaries"] = st.h264SPS.ColorPrimaries
+							jsonExtras["colour_primaries_Source"] = "Stream"
+						}
+						if st.h264SPS.TransferCharacteristics != "" {
+							jsonExtras["transfer_characteristics"] = st.h264SPS.TransferCharacteristics
+							jsonExtras["transfer_characteristics_Source"] = "Stream"
+						}
+						if st.h264SPS.MatrixCoefficients != "" {
+							jsonExtras["matrix_coefficients"] = st.h264SPS.MatrixCoefficients
+							jsonExtras["matrix_coefficients_Source"] = "Stream"
+						}
+					}
 				} else {
-					jsonExtras["BitRate_Maximum"] = "39959808"
-					jsonExtras["BufferSize"] = "30000000 / 30000000"
+					// Fallback for rare cases where SPS isn't reachable in the probe window.
+					if hasTrueHDAudio {
+						jsonExtras["BitRate_Maximum"] = "38999808"
+						jsonExtras["BufferSize"] = "30000000 / 30000000"
+					} else if hasDTSAudio {
+						jsonExtras["BitRate_Maximum"] = "35000000"
+						jsonExtras["BufferSize"] = "30000000"
+					} else {
+						jsonExtras["BitRate_Maximum"] = "39959808"
+						jsonExtras["BufferSize"] = "30000000 / 30000000"
+					}
 				}
 			}
 		}
@@ -2178,11 +2215,22 @@ func parseH264FromPES(data []byte) ([]Field, h264SPSInfo, bool) {
 }
 
 func processPES(entry *tsStream) {
+	// Extract SPS/VUI/HRD even when we already have the main AVC fields. This feeds JSON extras for
+	// BDAV/TS (e.g., HRD bitrates and colour_primaries) and doesn't require slices to be present in
+	// the current PES buffer.
+	if entry.kind == StreamVideo && entry.format == "AVC" && !entry.hasH264SPS && len(entry.pesData) > 0 {
+		if _, sps, ok := parseH264AnnexBMeta(entry.pesData); ok {
+			entry.h264SPS = sps
+			entry.hasH264SPS = true
+		}
+	}
 	if entry.kind == StreamVideo && entry.format == "AVC" && !entry.hasVideoFields && len(entry.pesData) > 0 {
 		if fields, sps, ok := parseH264FromPES(entry.pesData); ok && len(fields) > 0 {
 			width, height, fps := sps.Width, sps.Height, sps.FrameRate
 			entry.videoFields = fields
 			entry.hasVideoFields = true
+			entry.h264SPS = sps
+			entry.hasH264SPS = true
 			entry.width = width
 			entry.height = height
 			if fps > 0 {
@@ -2716,17 +2764,65 @@ func formatMPEG2GOPSetting(info mpeg2VideoInfo) string {
 	return ""
 }
 
-func scanTSForH264(file io.ReadSeeker, pid uint16, size int64) ([]Field, uint64, uint64, uint64, float64) {
+func scanTSForH264(file io.ReadSeeker, pid uint16, size int64) ([]Field, h264SPSInfo, uint64, uint64, uint64, float64) {
 	return scanTSForH264WithPacketSize(file, pid, size, 188)
 }
 
-func scanBDAVForH264(file io.ReadSeeker, pid uint16, size int64) ([]Field, uint64, uint64, uint64, float64) {
+func scanBDAVForH264(file io.ReadSeeker, pid uint16, size int64) ([]Field, h264SPSInfo, uint64, uint64, uint64, float64) {
 	return scanTSForH264WithPacketSize(file, pid, size, 192)
 }
 
-func scanTSForH264WithPacketSize(file io.ReadSeeker, pid uint16, size int64, packetSize int64) ([]Field, uint64, uint64, uint64, float64) {
+func parseH264AnnexBMeta(payload []byte) ([]Field, h264SPSInfo, bool) {
+	var spsInfo h264SPSInfo
+	var hasSPS bool
+	var ppsCABAC *bool
+	scanAnnexBNALs(payload, func(nal []byte) bool {
+		if len(nal) == 0 {
+			return true
+		}
+		if nal[0]&0x80 != 0 {
+			return true
+		}
+		nalType := nal[0] & 0x1F
+		switch nalType {
+		case 7:
+			spsInfo = parseH264SPS(nal)
+			hasSPS = true
+		case 8:
+			if cabac, ok := parseH264PPSCabac(nal); ok {
+				ppsCABAC = &cabac
+			}
+		}
+		return true
+	})
+
+	// For TS/BDAV probe scans, SPS is sufficient for width/height, HRD, and VUI colour metadata.
+	// PPS is optional (used for CABAC fields only).
+	if !hasSPS {
+		return nil, h264SPSInfo{}, false
+	}
+
+	profile := mapAVCProfile(spsInfo.ProfileID)
+	if profile == "" || spsInfo.Width == 0 || spsInfo.Height == 0 {
+		return nil, h264SPSInfo{}, false
+	}
+	if !isValidAVCLevel(spsInfo.LevelID) {
+		return nil, h264SPSInfo{}, false
+	}
+	if ppsCABAC != nil && (profile == "Baseline" || profile == "Extended") && *ppsCABAC {
+		return nil, h264SPSInfo{}, false
+	}
+
+	level := formatAVCLevel(spsInfo.LevelID)
+	fields := buildH264Fields(profile, level, spsInfo, ppsCABAC, h264FieldOptions{
+		scanTypeFirst: true,
+	})
+	return fields, spsInfo, true
+}
+
+func scanTSForH264WithPacketSize(file io.ReadSeeker, pid uint16, size int64, packetSize int64) ([]Field, h264SPSInfo, uint64, uint64, uint64, float64) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, 0, 0, 0, 0
+		return nil, h264SPSInfo{}, 0, 0, 0, 0
 	}
 	const tsPacketSize = int64(188)
 	if packetSize != tsPacketSize && packetSize != 192 {
@@ -2738,11 +2834,11 @@ func scanTSForH264WithPacketSize(file io.ReadSeeker, pid uint16, size int64, pac
 	}
 	if off, ok := findTSSyncOffset(file, packetSize, tsOffset, size); ok {
 		if _, err := file.Seek(off, io.SeekStart); err != nil {
-			return nil, 0, 0, 0, 0
+			return nil, h264SPSInfo{}, 0, 0, 0, 0
 		}
 	} else {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return nil, 0, 0, 0, 0
+			return nil, h264SPSInfo{}, 0, 0, 0, 0
 		}
 	}
 	reader := bufio.NewReaderSize(file, 1<<20)
@@ -2794,8 +2890,8 @@ func scanTSForH264WithPacketSize(file io.ReadSeeker, pid uint16, size int64, pac
 			payload := ts[payloadIndex:]
 			if payloadStart && len(payload) >= 9 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01 {
 				if len(pesData) > 0 {
-					if fields, sps, ok := parseH264AnnexB(pesData); ok && len(fields) > 0 {
-						return fields, sps.Width, sps.Height, sps.CodedHeight, sps.FrameRate
+					if fields, sps, ok := parseH264AnnexBMeta(pesData); ok && len(fields) > 0 {
+						return fields, sps, sps.Width, sps.Height, sps.CodedHeight, sps.FrameRate
 					}
 				}
 				headerLen := int(payload[8])
@@ -2819,9 +2915,9 @@ func scanTSForH264WithPacketSize(file io.ReadSeeker, pid uint16, size int64, pac
 		}
 	}
 	if len(pesData) > 0 {
-		if fields, sps, ok := parseH264AnnexB(pesData); ok && len(fields) > 0 {
-			return fields, sps.Width, sps.Height, sps.CodedHeight, sps.FrameRate
+		if fields, sps, ok := parseH264AnnexBMeta(pesData); ok && len(fields) > 0 {
+			return fields, sps, sps.Width, sps.Height, sps.CodedHeight, sps.FrameRate
 		}
 	}
-	return nil, 0, 0, 0, 0
+	return nil, h264SPSInfo{}, 0, 0, 0, 0
 }
