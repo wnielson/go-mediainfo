@@ -69,6 +69,9 @@ Owner: soup
 - TS caption parity cleanup:
 - `internal/mediainfo/mpeg_ts_captions.go`: emit CC3 only when command timing exists (`firstCommandPTS/Frame`) or as no-DTVCC fallback with detected display type.
 - Validation (Halloween 71-file TS sweep): `improved=10 same=61 worse=0`; biggest wins from removing extra CC3 tracks on Disney/Adult Swim captures.
+- TS caption parity cleanup (follow-up):
+- `internal/mediainfo/mpeg_ts_captions.go`: emit CC1 only when command timing exists (matches official `Duration_Start_Command` behavior on sampled broadcasts).
+- Validation vs `23ae163` (Halloween 71-file TS sweep): `improved=9 same=62 worse=0`.
 - I/O note: some UHD `mediainfo` probes on `/mnt/storage/torrents` entered kernel `D` state (blocked I/O); reruns exclude those exact paths to avoid runaway disk stalls.
 
 ## Learnings / Decisions

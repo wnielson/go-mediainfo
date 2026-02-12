@@ -44,7 +44,7 @@ func appendTSCaptionStreams(out *[]Stream, video *tsStream) {
 	// is bounded (e.g. ~30s). Heuristic: only emit Lines_Count for short streams.
 	emitLinesCount := duration > 0 && duration <= 30.0
 
-	if video.ccOdd.found {
+	if shouldEmitTSCC1(video) {
 		startCommand := 0.0
 		if fps > 0 && video.ccOdd.firstCommandPTS != 0 {
 			// MediaInfoLib tracks command time from FrameInfo.DTS; align to the nearest frame time.
@@ -100,6 +100,13 @@ func shouldEmitTSCC3(video *tsStream) bool {
 		return true
 	}
 	return false
+}
+
+func shouldEmitTSCC1(video *tsStream) bool {
+	if video == nil || !video.ccOdd.found {
+		return false
+	}
+	return video.ccOdd.firstCommandPTS != 0 || video.ccOdd.firstCommandFrame > 0
 }
 
 func buildTSCaptionStream(videoPID uint16, programNumber uint16, delaySeconds float64, duration float64, format string, service string, startCommandSeconds float64, emitLinesCount bool) Stream {
