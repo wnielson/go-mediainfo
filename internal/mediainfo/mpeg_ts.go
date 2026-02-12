@@ -900,32 +900,6 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	if !scanRange(headStart, headEnd, ac3StatsBounded) {
 		return ContainerInfo{}, nil, nil, false
 	}
-	if ac3StatsBounded {
-		const headThreshold = 256
-		for _, st := range streams {
-			if st == nil || !st.hasAC3 {
-				continue
-			}
-			headFrames := st.audioFramesStatsHead
-			if headFrames < headThreshold {
-				st.audioFramesStatsMax = 0
-				continue
-			}
-			// MediaInfoLib ParseSpeed<0.8: stats sampling window is derived from the number of
-			// frames observed in the head window, even when dynrng is not present.
-			if !st.ac3Stats.dynrngeSeen && st.ac3StatsComprHead < headThreshold {
-				st.audioFramesStatsMax = 0
-				continue
-			}
-			max := headFrames + headFrames/4
-			max -= headFrames / 50
-			max--
-			if max < headFrames {
-				max = headFrames
-			}
-			st.audioFramesStatsMax = max
-		}
-	}
 	headEndActual := headEnd
 	if headScannedEnd > 0 {
 		headEndActual = headScannedEnd
@@ -1016,6 +990,36 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if fps > 0 {
 				entry.videoFrameRate = fps
 			}
+		}
+	}
+
+	if ac3StatsBounded {
+		const headThreshold = 256
+		for _, st := range streams {
+			if st == nil || !st.hasAC3 {
+				continue
+			}
+			headFrames := st.audioFramesStatsHead
+			tailFrames := st.audioFramesStats - headFrames
+			if headFrames < headThreshold {
+				st.audioFramesStatsMax = 0
+				continue
+			}
+			// Match MediaInfo: when dynrng is never seen, ensure we have enough valid compr frames in
+			// the head window before emitting stats (avoids false-positive syncs in low-data scans).
+			if !st.ac3Stats.dynrngeSeen && st.ac3StatsComprHead < headThreshold {
+				st.audioFramesStatsMax = 0
+				continue
+			}
+			// MediaInfoLib ParseSpeed<0.8: bias stats toward the head window, but still sample tail frames.
+			// Small tail-proportional bump improves parity for AC-3 `compr_*` stats on real-world BDAV.
+			max := headFrames + (tailFrames*5)/9
+			// Small bias toward head-only stats when no tail window is present (e.g. small BDAV clips),
+			// while still matching MediaInfo's head+tail sampling on large files.
+			if tailFrames > 0 {
+				max--
+			}
+			st.audioFramesStatsMax = max
 		}
 	}
 
@@ -2756,9 +2760,9 @@ func consumeDTS(entry *tsStream, payload []byte) {
 	}
 }
 
-// MediaInfoLib can report AC-3/E-AC-3 stats counts above 1024 at ParseSpeed=0.5 on BDAV/TS,
-// so keep a larger head+tail sample buffer.
-const ac3SampleMax = 1024
+// MediaInfoLib can report AC-3/E-AC-3 stats counts above 1024 at ParseSpeed=0.5 on BDAV/TS.
+// Keep a larger head+tail sample buffer for closer stats parity without full-file scans.
+const ac3SampleMax = 2048
 
 func pushAC3Sample(entry *tsStream, info ac3Info, head bool) {
 	if head {
@@ -2977,7 +2981,8 @@ func finalizeBoundedAC3Stats(entry *tsStream) {
 		samples = append(samples, head[headStart:headStart+takeHead]...)
 	}
 	if tailBudget > 0 && len(tail) > 0 {
-		// Bias tail stats to the end of the file, matching MediaInfoLib's end-window scan behavior.
+		// MediaInfoLib parses the end-window sequentially from the jump point; stats tend to
+		// align closer when sampling frames nearer the end of the tail window.
 		if tailBudget > len(tail) {
 			tailBudget = len(tail)
 		}
