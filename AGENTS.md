@@ -91,13 +91,15 @@ Owner: soup
 - `Intruders .../00061.m2ts`: diff `0`.
 - `Network ... UHD .../00007.m2ts`: diff `0`.
 - `Static .../00004.m2ts`: diff `0`.
+- `Sabrina .../00007.m2ts` (video-only clip): diff `0` (BDAV derived `StreamSize`/`BitRate` parity fixed).
 - TS/BDAV AC-3 parity:
 - Removed the AC-3 stereo `alignToByte()` dynrng hack (it caused BDAV false-positive `dynrng_*`).
 - TS output now suppresses `dynrng`/`dynrng_*` for AC-3 stereo (`acmod==2`) to match official behavior on sampled discs.
 - TS bounded ParseSpeed stats: reduced TS tail contribution vs BDAV to better match `compr_*`/`dynrng_*` counts/averages.
 - Current focused diffs (same official command):
-- `Nickelodeon - Saturday Morning Promo.ts`: diff `12` (remaining: 2-byte `StreamSize` split + AC-3 stats window).
-- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `12` (remaining: 2-byte `StreamSize` split + AC-3 stats window).
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `8` (remaining: AC-3 `compr_*`/`dynrng_*` stats window/counts).
+- `Nickelodeon - Generic Halloween Promo.ts`: diff `8` (remaining: AC-3 `compr_*`/`dynrng_*` stats window/counts).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `12` (remaining: AC-3 stats window/counts across both audio tracks).
 
 ## Learnings / Decisions
 - Command name: mediainfo
