@@ -121,6 +121,16 @@ type tsStream struct {
 	xdsLawRating   string
 	xdsLastTitle   string
 	xdsTitleCounts map[string]int
+
+	// DVB subtitle metadata (EN 300 743) for TS streams.
+	dvbSubStreamID    byte
+	dvbSubPageIDs     []uint16
+	dvbSubRegionIDs   []byte
+	dvbSubRegionX     []uint16
+	dvbSubRegionY     []uint16
+	dvbSubRegionW     []uint16
+	dvbSubRegionH     []uint16
+	dvbSubRegionDepth []byte
 }
 
 func (s *tsStream) hasValidCEA608() bool {
@@ -811,6 +821,13 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						}
 						entry.pesData = append(entry.pesData[:0], data...)
 					}
+					if entry.kind == StreamText && entry.format == "DVB Subtitle" && len(data) > 0 {
+						const maxPES = 128 * 1024
+						if len(data) > maxPES {
+							data = data[:maxPES]
+						}
+						entry.pesData = append(entry.pesData[:0], data...)
+					}
 					if entry.kind == StreamVideo && entry.format == "VC-1" && len(data) > 0 {
 						const maxPES = 512 * 1024
 						if len(data) > maxPES {
@@ -871,6 +888,18 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 
 				if entry.kind == StreamVideo && (entry.format == "AVC" || entry.format == "HEVC") && len(entry.pesData) > 0 {
 					const maxPES = 512 * 1024
+					if len(entry.pesData) < maxPES {
+						remaining := maxPES - len(entry.pesData)
+						if remaining > 0 {
+							if len(payload) > remaining {
+								payload = payload[:remaining]
+							}
+							entry.pesData = append(entry.pesData, payload...)
+						}
+					}
+				}
+				if entry.kind == StreamText && entry.format == "DVB Subtitle" && len(entry.pesData) > 0 {
+					const maxPES = 128 * 1024
 					if len(entry.pesData) < maxPES {
 						remaining := maxPES - len(entry.pesData)
 						if remaining > 0 {
@@ -1499,6 +1528,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					}
 				} else if hasMPEGVideo && st.format == "MPEG Video" {
 					jsonExtras["Duration"] = formatJSONSeconds(duration)
+				} else if st.kind == StreamText && st.format == "DVB Subtitle" {
+					jsonExtras["Duration"] = fmt.Sprintf("%.3f", duration)
 				}
 			}
 			if !isBDAV && st.videoFrameRate > 0 && st.format != "MPEG Video" {
@@ -2022,11 +2053,42 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					fields = append(fields, Field{Name: "Stream size", Value: value})
 				}
 			}
-			if st.language != "" {
-				fields = append(fields, Field{Name: "Language", Value: formatLanguage(st.language)})
-				// Official mediainfo prefers ISO 639-1 where possible (e.g. "eng" -> "en").
-				jsonExtras["Language"] = normalizeLanguageCode(st.language)
+		}
+		if !isBDAV && st.kind == StreamText && st.format == "DVB Subtitle" {
+			d := ptsDuration(st.pts)
+			if d == 0 {
+				d = videoDuration
 			}
+			if d > 0 {
+				jsonExtras["Duration"] = fmt.Sprintf("%.3f", d)
+			}
+		}
+		if st.language != "" {
+			fields = append(fields, Field{Name: "Language", Value: formatLanguage(st.language)})
+			// Official mediainfo prefers ISO 639-1 where possible (e.g. "eng" -> "en").
+			jsonExtras["Language"] = normalizeLanguageCode(st.language)
+		}
+		if st.kind == StreamText && st.format == "DVB Subtitle" && len(st.dvbSubRegionIDs) > 0 {
+			n := len(st.dvbSubRegionIDs)
+			extraFields := []jsonKV{
+				{Key: "subtitle_stream_id", Val: formatRepeatByte(st.dvbSubStreamID, n)},
+				{Key: "page_id", Val: ""},
+				{Key: "region_id", Val: formatByteList(st.dvbSubRegionIDs)},
+				{Key: "region_horizontal_address", Val: formatUint16List(st.dvbSubRegionX)},
+				{Key: "region_vertical_address", Val: formatUint16List(st.dvbSubRegionY)},
+				{Key: "region_width", Val: formatUint16List(st.dvbSubRegionW)},
+				{Key: "region_height", Val: formatUint16List(st.dvbSubRegionH)},
+				{Key: "region_depth", Val: formatByteList(st.dvbSubRegionDepth)},
+			}
+			if len(st.dvbSubPageIDs) > 0 {
+				extraFields[1].Val = formatRepeatUint16(st.dvbSubPageIDs[0], n)
+			} else {
+				extraFields = append(extraFields[:1], extraFields[2:]...)
+			}
+			if jsonRaw == nil {
+				jsonRaw = map[string]string{}
+			}
+			jsonRaw["extra"] = renderJSONObject(extraFields, false)
 		}
 		if st.kind == StreamText && st.streamType != 0 {
 			fields = append(fields, Field{Name: "Codec ID", Value: formatTSCodecID(st.streamType)})
@@ -2506,13 +2568,13 @@ func parsePMT(payload []byte, programNumber uint16) ([]tsStream, uint16, int, in
 				if i+length > len(descs) {
 					break
 				}
-				if tag == 0x0A && length >= 4 {
+				if tag == 0x0A && length >= 3 {
 					code := string(descs[i : i+3])
 					// Keep the first language descriptor value.
 					if language == "" {
 						language = strings.TrimSpace(code)
 					}
-				} else if tag == 0x59 && length >= 8 {
+				} else if tag == 0x59 && length >= 3 {
 					// DVB subtitling descriptor.
 					hasDVBSubtitleDescriptor = true
 					if language == "" {
@@ -2761,6 +2823,9 @@ func processPES(entry *tsStream) {
 				entry.h264GOPM = b + 1
 			}
 		}
+	}
+	if entry.kind == StreamText && entry.format == "DVB Subtitle" && len(entry.pesData) > 0 {
+		consumeDVBSubtitle(entry, entry.pesData)
 	}
 	entry.pesData = entry.pesData[:0]
 }

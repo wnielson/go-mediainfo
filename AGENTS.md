@@ -85,7 +85,7 @@ Owner: soup
 - CI: `gofmt` clean; `go test ./...` green (golden `samples/sample.ts` updated for new TS fields).
 - TS parity (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - `Assault in the Ring(2008.1080i.TS).ts`: diff `0` (AVC GOP `Format_Settings_GOP` now matches).
-- `David Bowie and the Story of Ziggy Stardust (2012) ... .ts`: diff `10` (remaining: DVB subtitle `Duration`/`Language` + region/page extras).
+- `David Bowie and the Story of Ziggy Stardust (2012) ... .ts`: diff `0` (DVB subtitle `Duration`/`Language` + region/page extras now match).
 - `Reigen Ohatsu - Furueru Iwa (2024).ts`: diff `524` (ISDB/ARIB metadata/text tracks not implemented).
 - BDAV spot checks:
 - `Intruders .../00061.m2ts`: diff `0`.
