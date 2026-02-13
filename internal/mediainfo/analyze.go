@@ -930,7 +930,11 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 					continue
 				}
 				audioCount++
-				if ss, ok := parseInt(stream.JSON["StreamSize"]); ok && ss > 0 {
+				// Match MediaInfoLib: when StreamSize_Encoded is present, prefer it in General remainder math.
+				if ss, ok := parseInt(stream.JSON["StreamSize_Encoded"]); ok && ss > 0 {
+					audioSum += ss
+					audioSizedCount++
+				} else if ss, ok := parseInt(stream.JSON["StreamSize"]); ok && ss > 0 {
 					audioSum += ss
 					audioSizedCount++
 				}
@@ -974,8 +978,14 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 						}
 						br := int64(0)
 						if streams[i].JSON != nil {
-							if parsed, ok := parseInt(streams[i].JSON["BitRate"]); ok && parsed > 0 {
+							// Match MediaInfoLib: prefer BitRate_Encoded when present for sizing math.
+							if parsed, ok := parseInt(streams[i].JSON["BitRate_Encoded"]); ok && parsed > 0 {
 								br = parsed
+							}
+							if br == 0 {
+								if parsed, ok := parseInt(streams[i].JSON["BitRate"]); ok && parsed > 0 {
+									br = parsed
+								}
 							}
 						}
 						if br == 0 {
