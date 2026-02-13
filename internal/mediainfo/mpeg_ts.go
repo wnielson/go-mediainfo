@@ -2983,8 +2983,12 @@ func consumeDTS(entry *tsStream, payload []byte) {
 			entry.dtsHD = true
 			entry.audioBitRateKbps = 0
 			entry.audioBitRateMode = "Variable"
-			// MediaInfoLib uses DTS-HD ExSS metadata for Channels/ChannelLayout/ChannelPositions.
-			if ch, mask, ok := parseDTSHDExSSMeta(payload); ok {
+			bdXLL, okXLL := parseDTSHDXLLBitDepth(payload)
+			if okXLL && bdXLL > 0 {
+				entry.audioBitDepth = bdXLL
+			}
+			// MediaInfoLib uses DTS-HD ExSS metadata for Channels/ChannelLayout/BitDepth when available.
+			if ch, mask, bitDepth, ok := parseDTSHDExSSMeta(payload); ok {
 				if ch > 0 {
 					entry.audioChannels = uint64(ch)
 				}
@@ -2992,13 +2996,19 @@ func consumeDTS(entry *tsStream, payload []byte) {
 					entry.dtsSpeakerMask = mask
 					entry.hasDTSSpeakerMask = true
 				}
-			} else if ch, mask, ok := parseDTSHDExSSMeta(entry.audioBuffer); ok {
+				if bitDepth > 0 && !(okXLL && bdXLL > 0) {
+					entry.audioBitDepth = bitDepth
+				}
+			} else if ch, mask, bitDepth, ok := parseDTSHDExSSMeta(entry.audioBuffer); ok {
 				if ch > 0 {
 					entry.audioChannels = uint64(ch)
 				}
 				if mask > 0 {
 					entry.dtsSpeakerMask = mask
 					entry.hasDTSSpeakerMask = true
+				}
+				if bitDepth > 0 && !(okXLL && bdXLL > 0) {
+					entry.audioBitDepth = bitDepth
 				}
 			}
 		}
@@ -3031,13 +3041,20 @@ func consumeDTS(entry *tsStream, payload []byte) {
 		if entry.dtsHD {
 			entry.audioBitRateKbps = 0
 			entry.audioBitRateMode = "Variable"
-			if ch, mask, ok := parseDTSHDExSSMeta(entry.audioBuffer[i:]); ok {
+			bdXLL, okXLL := parseDTSHDXLLBitDepth(entry.audioBuffer[i:])
+			if okXLL && bdXLL > 0 {
+				entry.audioBitDepth = bdXLL
+			}
+			if ch, mask, bitDepth, ok := parseDTSHDExSSMeta(entry.audioBuffer[i:]); ok {
 				if ch > 0 {
 					entry.audioChannels = uint64(ch)
 				}
 				if mask > 0 {
 					entry.dtsSpeakerMask = mask
 					entry.hasDTSSpeakerMask = true
+				}
+				if bitDepth > 0 && !(okXLL && bdXLL > 0) {
+					entry.audioBitDepth = bitDepth
 				}
 			}
 		}
@@ -3323,6 +3340,108 @@ func hasDTSHDExtension(payload []byte) bool {
 	return false
 }
 
+var dtsCRCCCITTTable = func() [256]uint16 {
+	// MediaInfoLib uses a CCITT CRC with init=0xFFFF and a table precomputed with polynomial 0x1021,
+	// with entries byte-swapped.
+	var t [256]uint16
+	const poly uint16 = 0x1021
+	for i := 0; i < 256; i++ {
+		crc := uint16(i) << 8
+		for j := 0; j < 8; j++ {
+			if crc&0x8000 != 0 {
+				crc = (crc << 1) ^ poly
+			} else {
+				crc <<= 1
+			}
+		}
+		t[i] = (crc >> 8) | (crc << 8)
+	}
+	return t
+}()
+
+func dtsCRCCCITTCompute(buf []byte) uint16 {
+	c := uint16(0xFFFF)
+	for _, b := range buf {
+		c = (c >> 8) ^ dtsCRCCCITTTable[byte(c)^b]
+	}
+	return c
+}
+
+func parseDTSHDXLLBitDepth(payload []byte) (int, bool) {
+	// MediaInfoLib reports DTS-HD bit depth from XLL channel set headers when available (HD_BitResolution_Real).
+	// XLL sync word: 0x41A29547 (File_Dts.cpp DTS_Extension_Mapping).
+	const (
+		xllSync        = 0x41A29547
+		maxAfterSync   = 4096 // keep bounded; we only need early headers
+		minChSetHeader = 4
+		maxChSetHeader = 256
+	)
+
+	best := 0
+	found := false
+
+	for i := 0; i+8 <= len(payload); i++ {
+		if binary.BigEndian.Uint32(payload[i:]) != xllSync {
+			continue
+		}
+		start := i + 4
+		limit := start + maxAfterSync
+		if limit > len(payload) {
+			limit = len(payload)
+		}
+
+		// Scan for Channel Set sub-headers and validate via CCITT CRC (compute result must be 0).
+		for j := start; j+2 <= limit; j++ {
+			begin := binary.BigEndian.Uint16(payload[j:])
+			chSetHeaderSize := int(begin >> 6) // 10 bits
+			if chSetHeaderSize < minChSetHeader || chSetHeaderSize > maxChSetHeader {
+				continue
+			}
+			segLen := chSetHeaderSize + 1 // MediaInfoLib: Dts_CRC_CCIT_Compute(..., ChSetHeaderSize+1)
+			if j+segLen > len(payload) {
+				continue
+			}
+			if dtsCRCCCITTCompute(payload[j:j+segLen]) != 0 {
+				continue
+			}
+
+			br := newBitReader(payload[j : j+segLen])
+			hs := br.readBitsValue(10)
+			if hs == ^uint64(0) || int(hs) != chSetHeaderSize {
+				continue
+			}
+			chSetLL := br.readBitsValue(4)
+			if chSetLL == ^uint64(0) {
+				continue
+			}
+			chSetLLChannels := int(chSetLL) + 1
+			if chSetLLChannels < 1 || chSetLLChannels > 16 {
+				continue
+			}
+			if br.readBitsValue(uint8(chSetLLChannels)) == ^uint64(0) { // ResidualChEncode
+				continue
+			}
+			bitRes := br.readBitsValue(5)
+			if bitRes == ^uint64(0) {
+				continue
+			}
+			bd := int(bitRes) + 1
+			if bd < 1 || bd > 32 {
+				continue
+			}
+			if bd > best {
+				best = bd
+			}
+			found = true
+		}
+	}
+
+	if !found || best == 0 {
+		return 0, false
+	}
+	return best, true
+}
+
 func dtsHDSpeakerActivityMask(mask uint16) string {
 	// MediaInfoLib: DTS_HD_SpeakerActivityMask in File_Dts.cpp.
 	out := ""
@@ -3452,7 +3571,7 @@ func dtsHDSpeakerActivityMaskChannelLayout(mask uint16) string {
 	return out[1:]
 }
 
-func parseDTSHDExSSMeta(payload []byte) (int, uint16, bool) {
+func parseDTSHDExSSMeta(payload []byte) (int, uint16, int, bool) {
 	// Minimal DTS-HD ExSS header parsing: enough to extract TotalNumChs and SpeakerActivityMask.
 	// Reference: MediaInfoLib Source/MediaInfo/Audio/File_Dts.cpp (HD ExSS header).
 	for i := 0; i+6 <= len(payload); i++ {
@@ -3467,51 +3586,60 @@ func parseDTSHDExSSMeta(payload []byte) (int, uint16, bool) {
 		}
 		subStreamIndexU, ok := read(2)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		headerSizeTypeU, ok := read(1)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		extraSize := uint8(headerSizeTypeU) << 2
 		extSSHeaderSizeU, ok := read(8 + extraSize)
 		if !ok || extSSHeaderSizeU < 4 {
-			return 0, 0, false
+			return 0, 0, 0, false
+		}
+		// MediaInfoLib validates a CCITT CRC before trusting ExSS header fields.
+		// CRC is computed starting at the byte AFTER Sync+UserDefinedBits (i+5), for (ExtSSHeaderSize-4) bytes.
+		end := i + 5 + int(extSSHeaderSizeU) - 4
+		if end <= i+5 || end > len(payload) {
+			continue
+		}
+		if dtsCRCCCITTCompute(payload[i+5:end]) != 0 {
+			continue
 		}
 		_, ok = read(16 + extraSize) // ExtSSFsize
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		staticFieldsPresentU, ok := read(1)
 		if !ok || staticFieldsPresentU == 0 {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		_, ok = read(2) // RefClockCode
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		_, ok = read(3) // ExSSFrameDurationCode
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		timeStampFlagU, ok := read(1)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		if timeStampFlagU == 1 {
 			_, ok = read(36)
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 		}
 		numAudioPresentU, ok := read(3)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		numAudioPresent := int(numAudioPresentU) + 1
 		numAssetsU, ok := read(3)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		numAssets := int(numAssetsU) + 1
 
@@ -3521,7 +3649,7 @@ func parseDTSHDExSSMeta(payload []byte) (int, uint16, bool) {
 		for range numAudioPresent {
 			m, ok := read(uint8(maskLen))
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 			activeMasks = append(activeMasks, m)
 		}
@@ -3529,104 +3657,108 @@ func parseDTSHDExSSMeta(payload []byte) (int, uint16, bool) {
 			if m&1 == 1 {
 				_, ok = read(uint8(8 * iterCount))
 				if !ok {
-					return 0, 0, false
+					return 0, 0, 0, false
 				}
 			}
 		}
 		mixMetadataEnblU, ok := read(1)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		if mixMetadataEnblU == 1 {
 			_, ok = read(2) // MixMetadataAdjLevel
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 			bits4MaskU, ok := read(2)
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 			bits4Mask := 4 + int(bits4MaskU)*4
 			numMixOutU, ok := read(2)
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 			numMixOut := int(numMixOutU) + 1
 			for range numMixOut {
 				_, ok = read(uint8(bits4Mask))
 				if !ok {
-					return 0, 0, false
+					return 0, 0, 0, false
 				}
 			}
 		}
 		for range numAssets {
 			_, ok = read(16 + extraSize) // AssetFsize
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 		}
 		// First asset descriptor: pull TotalNumChs and optional speaker mask.
 		_, ok = read(9) // AssetDescriptFsize
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		_, ok = read(3) // AssetIndex
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 
 		assetTypePresentU, ok := read(1)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		if assetTypePresentU == 1 {
 			_, ok = read(4)
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 		}
 		langPresentU, ok := read(1)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		if langPresentU == 1 {
 			_, ok = read(24)
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 		}
 		infoTextPresentU, ok := read(1)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		if infoTextPresentU == 1 {
 			infoTextSizeU, ok := read(10)
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 			infoTextSize := int(infoTextSizeU) + 1
 			_, ok = read(uint8(infoTextSize * 8))
 			if !ok {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 		}
-		_, ok = read(5) // BitResolution
+		bitResolutionU, ok := read(5) // BitResolution
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
+		}
+		bitDepth := int(bitResolutionU) + 1
+		if bitDepth < 1 || bitDepth > 32 {
+			bitDepth = 0
 		}
 		_, ok = read(4) // MaxSampleRate
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		totalChU, ok := read(8)
 		if !ok {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		totalCh := int(totalChU) + 1
 
 		one2oneU, ok := read(1) // One2OneMapChannels2Speakers
 		if !ok {
-			return totalCh, 0, true
+			return totalCh, 0, bitDepth, true
 		}
 		if one2oneU == 1 {
 			if totalCh > 2 {
@@ -3637,25 +3769,25 @@ func parseDTSHDExSSMeta(payload []byte) (int, uint16, bool) {
 			}
 			spkrMaskEnabledU, ok := read(1)
 			if !ok || spkrMaskEnabledU == 0 {
-				return totalCh, 0, true
+				return totalCh, 0, bitDepth, true
 			}
 			numBitsU, ok := read(2)
 			if !ok {
-				return totalCh, 0, true
+				return totalCh, 0, bitDepth, true
 			}
 			bits := 4 + int(numBitsU)*4
 			if bits > 16 {
-				return totalCh, 0, true
+				return totalCh, 0, bitDepth, true
 			}
 			maskU, ok := read(uint8(bits))
 			if !ok {
-				return totalCh, 0, true
+				return totalCh, 0, bitDepth, true
 			}
-			return totalCh, uint16(maskU), true
+			return totalCh, uint16(maskU), bitDepth, true
 		}
-		return totalCh, 0, true
+		return totalCh, 0, bitDepth, true
 	}
-	return 0, 0, false
+	return 0, 0, 0, false
 }
 
 func adtsSampleRate(index int) float64 {
