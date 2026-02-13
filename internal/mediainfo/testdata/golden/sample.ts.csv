@@ -6,6 +6,7 @@ File size,305 KiB
 Duration,3 s 937 ms
 Overall bit rate mode,Variable
 Overall bit rate,634 kb/s
+Frame rate,29.970 FPS
 
 Video
 ID,256 (0x100)
@@ -21,7 +22,7 @@ Duration,3 s 971 ms
 Width,640 pixels
 Height,360 pixels
 Display aspect ratio,16:9
-Frame rate mode,Variable
+Frame rate,29.970 FPS
 Color space,YUV
 Chroma subsampling,4:2:0
 Bit depth,8 bits

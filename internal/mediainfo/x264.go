@@ -94,3 +94,40 @@ func findX264VbvMaxrate(encoding string) (float64, bool) {
 func findX264VbvBufsize(encoding string) (float64, bool) {
 	return findX264ParamKbps(encoding, "vbv_bufsize")
 }
+
+func findX264ParamInt(encoding string, key string) (int, bool) {
+	idx := strings.Index(encoding, key+"=")
+	if idx == -1 {
+		return 0, false
+	}
+	start := idx + len(key) + 1
+	end := start
+	for end < len(encoding) {
+		ch := encoding[end]
+		if ch >= '0' && ch <= '9' {
+			end++
+			continue
+		}
+		break
+	}
+	if end == start {
+		return 0, false
+	}
+	value, err := strconv.Atoi(encoding[start:end])
+	if err != nil || value < 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func findX264Keyint(encoding string) (int, bool) {
+	value, ok := findX264ParamInt(encoding, "keyint")
+	if !ok || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func findX264Bframes(encoding string) (int, bool) {
+	return findX264ParamInt(encoding, "bframes")
+}

@@ -43,6 +43,18 @@ type tsStream struct {
 	// AVC/H.264 SPS info for TS/BDAV streams (used for JSON extras like colour_primaries and HRD).
 	h264SPS    h264SPSInfo
 	hasH264SPS bool
+	// H.264 GOP settings inferred from slice types/IDR spacing (Format_Settings_GOP).
+	h264GOPM int
+	h264GOPN int
+	// Whether GOP inference had SPS context available (used to avoid field-picture double-counting).
+	h264GOPUsedSPS bool
+	// Accumulated picture types from early PES packets to infer GOP settings.
+	h264GOPPics []byte
+	// Rolling bytestream buffer to handle NAL units that span PES boundaries.
+	h264GOPPending []byte
+	// Access Unit Delimiter-aware GOP scan state.
+	h264GOPSeenAUD   bool
+	h264GOPNeedSlice bool
 	// HEVC SPS/HDR info for TS/BDAV streams.
 	hevcSPS          h264SPSInfo
 	hasHEVCSPS       bool
@@ -1345,6 +1357,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		if st.kind == StreamAudio {
 			if isTrueHD {
 				fields = append(fields, Field{Name: "Muxing mode", Value: "Stream extension"})
+			} else if st.format == "AAC" && st.streamType == 0x11 {
+				// MPEG-TS: LATM AAC (stream_type 0x11).
+				fields = append(fields, Field{Name: "Muxing mode", Value: "LATM"})
 			} else if st.audioProfile == "LC" {
 				fields = append(fields, Field{Name: "Format/Info", Value: "Advanced Audio Codec Low Complexity"})
 				fields = append(fields, Field{Name: "Format version", Value: formatAACVersion(st.audioMPEGVersion)})
@@ -1416,6 +1431,32 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					jsonExtras["FrameRate_Den"] = strconv.Itoa(st.vc1FrameRateDen)
 				}
 			}
+			if !isBDAV && st.format == "AVC" && st.hasH264SPS {
+				if st.h264SPS.HasColorRange || st.h264SPS.HasColorDescription {
+					jsonExtras["colour_description_present"] = "Yes"
+					jsonExtras["colour_description_present_Source"] = "Stream"
+					if st.h264SPS.ColorRange != "" {
+						jsonExtras["colour_range"] = st.h264SPS.ColorRange
+						jsonExtras["colour_range_Source"] = "Stream"
+					}
+					if st.h264SPS.ColorPrimaries != "" {
+						jsonExtras["colour_primaries"] = st.h264SPS.ColorPrimaries
+						jsonExtras["colour_primaries_Source"] = "Stream"
+					}
+					if st.h264SPS.TransferCharacteristics != "" {
+						jsonExtras["transfer_characteristics"] = st.h264SPS.TransferCharacteristics
+						jsonExtras["transfer_characteristics_Source"] = "Stream"
+					}
+					if st.h264SPS.MatrixCoefficients != "" {
+						jsonExtras["matrix_coefficients"] = st.h264SPS.MatrixCoefficients
+						jsonExtras["matrix_coefficients_Source"] = "Stream"
+					}
+				}
+			}
+			if !isBDAV && st.format == "AVC" && st.h264GOPM > 0 && st.h264GOPN > 0 {
+				gop := fmt.Sprintf("M=%d, N=%d", st.h264GOPM, st.h264GOPN)
+				jsonExtras["Format_Settings_GOP"] = gop
+			}
 			duration := ptsDuration(st.pts)
 			if duration == 0 {
 				duration = videoDuration
@@ -1458,6 +1499,20 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					}
 				} else if hasMPEGVideo && st.format == "MPEG Video" {
 					jsonExtras["Duration"] = formatJSONSeconds(duration)
+				}
+			}
+			if !isBDAV && st.videoFrameRate > 0 && st.format != "MPEG Video" {
+				fields = append(fields, Field{Name: "Frame rate", Value: formatFrameRate(st.videoFrameRate)})
+				if duration > 0 {
+					jsonExtras["Duration"] = formatJSONSeconds(duration)
+				}
+				jsonExtras["FrameRate"] = fmt.Sprintf("%.3f", st.videoFrameRate)
+				if num, den := rationalizeFrameRate(st.videoFrameRate); num > 0 && den > 0 {
+					jsonExtras["FrameRate_Num"] = strconv.Itoa(num)
+					jsonExtras["FrameRate_Den"] = strconv.Itoa(den)
+				}
+				if duration > 0 {
+					jsonExtras["FrameCount"] = strconv.Itoa(int(math.Round(duration * st.videoFrameRate)))
 				}
 			}
 			if isBDAV && st.videoFrameRate > 0 {
@@ -1527,9 +1582,6 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					jsonExtras["Delay_DropFrame"] = formatYesNo(*info.GOPDropFrame)
 					jsonExtras["Delay_Original_DropFrame"] = formatYesNo(*info.GOPDropFrame)
 				}
-			}
-			if st.format != "MPEG Video" && !isBDAV {
-				fields = append(fields, Field{Name: "Frame rate mode", Value: "Variable"})
 			}
 			if isBDAV && st.format == "AVC" {
 				// Match MediaInfo: BDAV video reports BitRate_Mode=VBR even when BitRate/StreamSize are omitted.
@@ -1608,6 +1660,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			// PTS deltas cover (N-1) frame intervals; official mediainfo reports full duration (N intervals).
 			if st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && duration > 0 {
 				duration += float64(st.ac3Info.spf) / float64(st.ac3Info.sampleRate)
+			}
+			if st.format == "AAC" && st.audioRate > 0 && st.audioSpf > 0 && duration > 0 {
+				duration += float64(st.audioSpf) / st.audioRate
 			}
 			if !isTrueHD && !partialScan && st.hasAC3 && st.ac3Info.sampleRate > 0 && st.ac3Info.spf > 0 && st.audioFrames > 0 {
 				rate := int64(st.ac3Info.sampleRate)
@@ -2567,6 +2622,18 @@ func processPES(entry *tsStream) {
 		if _, sps, ok := parseH264AnnexBMeta(entry.pesData); ok {
 			entry.h264SPS = sps
 			entry.hasH264SPS = true
+			if entry.width == 0 && sps.Width > 0 {
+				entry.width = sps.Width
+			}
+			if entry.height == 0 && sps.Height > 0 {
+				entry.height = sps.Height
+			}
+			if entry.storedHeight == 0 && sps.CodedHeight > 0 {
+				entry.storedHeight = sps.CodedHeight
+			}
+			if entry.videoFrameRate == 0 && sps.FrameRate > 0 {
+				entry.videoFrameRate = sps.FrameRate
+			}
 		}
 	}
 	if entry.kind == StreamVideo && entry.format == "HEVC" && len(entry.pesData) > 0 {
@@ -2646,6 +2713,37 @@ func processPES(entry *tsStream) {
 			}
 		}
 	}
+	if entry.kind == StreamVideo && entry.format == "AVC" && len(entry.pesData) > 0 {
+		var sps *h264SPSInfo
+		if entry.hasH264SPS {
+			sps = &entry.h264SPS
+		}
+
+		redoWithSPS := entry.h264GOPM > 0 && entry.h264GOPN > 0 && !entry.h264GOPUsedSPS && sps != nil
+		if redoWithSPS {
+			entry.h264GOPM = 0
+			entry.h264GOPN = 0
+			entry.h264GOPPics = entry.h264GOPPics[:0]
+			entry.h264GOPPending = entry.h264GOPPending[:0]
+			entry.h264GOPSeenAUD = false
+			entry.h264GOPNeedSlice = false
+		}
+
+		if entry.h264GOPM == 0 || entry.h264GOPN == 0 {
+			entry.h264GOPPics, entry.h264GOPPending = appendH264PictureTypes(entry.h264GOPPics, entry.h264GOPPending, entry.pesData, 512, sps, &entry.h264GOPSeenAUD, &entry.h264GOPNeedSlice)
+			if m, n, ok := inferH264GOPFromPics(entry.h264GOPPics); ok {
+				if sps != nil && sps.MBAFF && n > 0 && n < 12 {
+					// MediaInfo reports H.264 GOP length in frame units. For MBAFF streams, our
+					// lightweight scan sees roughly half-rate keyframe spacing; adjust to match.
+					n = n*2 - 1
+				}
+				entry.h264GOPM = m
+				entry.h264GOPN = n
+				entry.h264GOPUsedSPS = sps != nil
+				entry.h264GOPPending = entry.h264GOPPending[:0]
+			}
+		}
+	}
 	if entry.kind == StreamVideo && (entry.writingLibrary == "" || entry.encoding == "") && len(entry.pesData) > 0 {
 		writingLib, encoding := findX264Info(entry.pesData)
 		if writingLib != "" && entry.writingLibrary == "" {
@@ -2653,6 +2751,15 @@ func processPES(entry *tsStream) {
 		}
 		if encoding != "" && entry.encoding == "" {
 			entry.encoding = encoding
+		}
+		if entry.format == "AVC" && encoding != "" {
+			// Prefer x264 signaled GOP over heuristics. MediaInfo's GOP N matches keyint on common streams.
+			if n, ok := findX264Keyint(encoding); ok {
+				entry.h264GOPN = n
+			}
+			if b, ok := findX264Bframes(encoding); ok {
+				entry.h264GOPM = b + 1
+			}
 		}
 	}
 	entry.pesData = entry.pesData[:0]
@@ -2667,7 +2774,11 @@ func consumeAudio(entry *tsStream, payload []byte, collectAC3Stats bool, ac3Stat
 		if entry.audioBitRateMode == "" {
 			entry.audioBitRateMode = "Variable"
 		}
-		consumeADTS(entry, payload)
+		if entry.streamType == 0x11 {
+			consumeLATM(entry, payload)
+		} else {
+			consumeADTS(entry, payload)
+		}
 	case "AC-3":
 		if entry.audioBitRateMode == "" {
 			entry.audioBitRateMode = "Constant"

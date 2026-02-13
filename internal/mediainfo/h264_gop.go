@@ -1,0 +1,302 @@
+package mediainfo
+
+func appendH264PictureTypes(pics []byte, pending []byte, chunk []byte, limit int, sps *h264SPSInfo, seenAUD *bool, needSlice *bool) ([]byte, []byte) {
+	if limit <= 0 || len(pics) >= limit {
+		return pics, pending
+	}
+	if len(chunk) == 0 {
+		return pics, pending
+	}
+
+	pending = append(pending, chunk...)
+
+	// Drop leading junk and keep a tiny tail if we don't even have a start code yet.
+	sc, scLen := findAnnexBStartCode(pending, 0)
+	if sc == -1 {
+		if len(pending) > 3 {
+			pending = pending[len(pending)-3:]
+		}
+		return pics, pending
+	}
+	if sc > 0 {
+		pending = pending[sc:]
+		sc = 0
+	}
+
+	for len(pics) < limit {
+		nalStart := sc + scLen
+		if nalStart >= len(pending) {
+			break
+		}
+		next, nextLen := findAnnexBStartCode(pending, nalStart)
+		if next == -1 {
+			break // keep incomplete last NAL for the next PES chunk
+		}
+		if nalStart < next {
+			nal := pending[nalStart:next]
+			if len(nal) > 0 && nal[0]&0x80 == 0 {
+				nalType := nal[0] & 0x1F
+				if nalType == 9 && seenAUD != nil && needSlice != nil {
+					*seenAUD = true
+					*needSlice = true
+					sc = next
+					scLen = nextLen
+					continue
+				}
+				if nalType == 1 || nalType == 5 {
+					if seenAUD != nil && needSlice != nil && *seenAUD && !*needSlice {
+						sc = next
+						scLen = nextLen
+						continue
+					}
+					if firstMB, ok := h264FirstMBInSlice(nal); ok && firstMB == 0 && h264CountSliceForGOP(nal, nalType, sps) {
+						pics = append(pics, h264SlicePictureType(nal, nalType))
+						if seenAUD != nil && needSlice != nil && *seenAUD {
+							*needSlice = false
+						}
+					}
+				}
+			}
+		}
+		sc = next
+		scLen = nextLen
+	}
+
+	// Keep remainder from the last start code (the start of the incomplete NAL).
+	if sc > 0 {
+		pending = pending[sc:]
+	}
+	return pics, pending
+}
+
+func h264CountSliceForGOP(nal []byte, nalType byte, sps *h264SPSInfo) bool {
+	if sps == nil || sps.FrameMbsOnly {
+		return true
+	}
+
+	rbsp := nalToRBSP(nal)
+	if len(rbsp) == 0 {
+		return true
+	}
+	br := newBitReader(rbsp)
+	if _, ok := br.readUEWithOk(); !ok { // first_mb_in_slice
+		return true
+	}
+	if _, ok := br.readUEWithOk(); !ok { // slice_type
+		return true
+	}
+	if _, ok := br.readUEWithOk(); !ok { // pic_parameter_set_id
+		return true
+	}
+	if sps.SeparateColourPlane {
+		if br.readBitsValue(2) == ^uint64(0) {
+			return true
+		}
+	}
+
+	bits := sps.Log2MaxFrameNumMinus4 + 4
+	if bits <= 0 || bits > 32 {
+		return true
+	}
+	if br.readBitsValue(uint8(bits)) == ^uint64(0) { // frame_num
+		return true
+	}
+
+	// field_pic_flag when frame_mbs_only_flag == 0.
+	fieldPicFlag := br.readBitsValue(1)
+	if fieldPicFlag == ^uint64(0) {
+		return true
+	}
+	if fieldPicFlag == 0 {
+		return true
+	}
+
+	// bottom_field_flag when field_pic_flag == 1. Count only top fields to avoid double-counting MBAFF/field-coded.
+	bottomFieldFlag := br.readBitsValue(1)
+	if bottomFieldFlag == ^uint64(0) {
+		return true
+	}
+	return bottomFieldFlag == 0
+}
+
+func h264SlicePictureType(nal []byte, nalType byte) byte {
+	if nalType == 5 {
+		// Distinguish IDR from non-IDR I slices. MediaInfo's GOP N matches IDR spacing on some streams.
+		return 'K'
+	}
+
+	rbsp := nalToRBSP(nal)
+	if len(rbsp) == 0 {
+		return 'P'
+	}
+	br := newBitReader(rbsp)
+	_, _ = br.readUEWithOk() // first_mb_in_slice
+	sliceType, ok := br.readUEWithOk()
+	if !ok {
+		return 'P'
+	}
+
+	switch sliceType % 5 {
+	case 0:
+		return 'P'
+	case 1:
+		return 'B'
+	case 2:
+		return 'I'
+	default:
+		return 'P'
+	}
+}
+
+func inferH264GOPFromPics(pics []byte) (m int, n int, ok bool) {
+	if len(pics) < 16 {
+		return 0, 0, false
+	}
+
+	// N: prefer the most common IDR (K) spacing; fall back to I-slice spacing.
+	n = inferH264GOPNModeConfident(pics, 'K', 64)
+	if n <= 0 {
+		n = inferH264GOPNModeConfident(pics, 'I', 64)
+	}
+
+	// M: most common spacing between anchor (I/P) pictures.
+	lastAnchor := -1
+	counts := map[int]int{}
+	for i := 0; i < len(pics); i++ {
+		if pics[i] != 'I' && pics[i] != 'P' && pics[i] != 'K' {
+			continue
+		}
+		if lastAnchor >= 0 {
+			d := i - lastAnchor
+			if d > 0 && d <= 32 {
+				counts[d]++
+			}
+		}
+		lastAnchor = i
+	}
+	bestD := 0
+	bestC := 0
+	for d, c := range counts {
+		if c > bestC || (c == bestC && d < bestD) {
+			bestD = d
+			bestC = c
+		}
+	}
+	if bestD > 0 {
+		m = bestD
+	}
+
+	if m <= 0 || n <= 0 {
+		return 0, 0, false
+	}
+	return m, n, true
+}
+
+func inferH264GOPN(pics []byte, want byte) int {
+	first := -1
+	second := -1
+	for i := 0; i < len(pics); i++ {
+		if pics[i] == want {
+			if first == -1 {
+				first = i
+			} else {
+				second = i
+				break
+			}
+		}
+	}
+	if first >= 0 && second > first {
+		return second - first
+	}
+	return 0
+}
+
+func inferH264GOPNMode(pics []byte, want byte, maxGap int) int {
+	if maxGap <= 0 {
+		return 0
+	}
+	last := -1
+	counts := map[int]int{}
+	for i := 0; i < len(pics); i++ {
+		if pics[i] != want {
+			continue
+		}
+		if last >= 0 {
+			d := i - last
+			if d > 0 && d <= maxGap {
+				counts[d]++
+			}
+		}
+		last = i
+	}
+	bestD := 0
+	bestC := 0
+	for d, c := range counts {
+		if c > bestC || (c == bestC && d > bestD) {
+			bestD = d
+			bestC = c
+		}
+	}
+	if bestD > 0 {
+		return bestD
+	}
+	// Very short samples: fall back to the first two occurrences.
+	return inferH264GOPN(pics, want)
+}
+
+func inferH264GOPNModeConfident(pics []byte, want byte, maxGap int) int {
+	bestD, bestC, total := inferH264GOPNModeWithSupport(pics, want, maxGap)
+	// MediaInfo only emits Format_Settings_GOP when GOP structure looks stable. Require the
+	// modal N to dominate the observed keyframe spacing.
+	if bestD <= 0 || bestC < 3 || bestC*2 < total {
+		return 0
+	}
+	return bestD
+}
+
+func inferH264GOPNModeWithSupport(pics []byte, want byte, maxGap int) (bestD int, bestC int, total int) {
+	if maxGap <= 0 {
+		return 0, 0, 0
+	}
+	last := -1
+	counts := map[int]int{}
+	for i := 0; i < len(pics); i++ {
+		if pics[i] != want {
+			continue
+		}
+		if last >= 0 {
+			d := i - last
+			if d > 0 && d <= maxGap {
+				counts[d]++
+			}
+		}
+		last = i
+	}
+	for _, c := range counts {
+		total += c
+	}
+	for d, c := range counts {
+		if c > bestC || (c == bestC && d > bestD) {
+			bestD = d
+			bestC = c
+		}
+	}
+	if bestD > 0 {
+		return bestD, bestC, total
+	}
+	// Very short samples: fall back to the first two occurrences.
+	d := inferH264GOPN(pics, want)
+	if d <= 0 {
+		return 0, 0, total
+	}
+	return d, 1, total
+}
+
+// inferH264GOP estimates MediaInfo's Format_Settings_GOP (M/N) from early slice headers.
+// It is intentionally lightweight: scan a bounded number of pictures and measure spacing between
+// IDR (I) pictures and anchor (I/P) pictures.
+func inferH264GOP(pes []byte) (m int, n int, ok bool) {
+	const maxPictures = 256
+	pics, _ := appendH264PictureTypes(make([]byte, 0, maxPictures), nil, pes, maxPictures, nil, nil, nil)
+	return inferH264GOPFromPics(pics)
+}

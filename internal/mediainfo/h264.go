@@ -9,7 +9,11 @@ type h264SPSInfo struct {
 	BitDepth                int
 	RefFrames               int
 	Progressive             bool
+	MBAFF                   bool
 	HasScanType             bool
+	FrameMbsOnly            bool
+	Log2MaxFrameNumMinus4   int
+	SeparateColourPlane     bool
 	SARWidth                uint32
 	SARHeight               uint32
 	HasSAR                  bool
@@ -114,6 +118,9 @@ func buildH264Fields(profile string, level string, spsInfo h264SPSInfo, ppsCABAC
 	}
 	if opts.scanTypeFirst && spsInfo.HasScanType {
 		fields = appendH264ScanType(fields, spsInfo)
+		if spsInfo.MBAFF {
+			fields = append(fields, Field{Name: "Scan order", Value: "TFF"})
+		}
 	}
 	if spsInfo.HasVideoFmt {
 		if standard := mapH264VideoFormat(spsInfo.VideoFormat); standard != "" {
@@ -136,6 +143,9 @@ func buildH264Fields(profile string, level string, spsInfo h264SPSInfo, ppsCABAC
 	}
 	if !opts.scanTypeFirst && spsInfo.HasScanType {
 		fields = appendH264ScanType(fields, spsInfo)
+		if spsInfo.MBAFF {
+			fields = append(fields, Field{Name: "Scan order", Value: "TFF"})
+		}
 	}
 	if spsInfo.RefFrames > 0 {
 		fields = append(fields, Field{Name: "Format settings, Reference frames", Value: fmt.Sprintf("%d frames", spsInfo.RefFrames)})
@@ -163,6 +173,9 @@ func appendH264ScanType(fields []Field, spsInfo h264SPSInfo) []Field {
 	if spsInfo.Progressive {
 		return append(fields, Field{Name: "Scan type", Value: "Progressive"})
 	}
+	if spsInfo.MBAFF {
+		return append(fields, Field{Name: "Scan type", Value: "MBAFF"})
+	}
 	return append(fields, Field{Name: "Scan type", Value: "Interlaced"})
 }
 
@@ -177,6 +190,7 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	chromaFormat := 1
 	bitDepth := 8
 	separateColourPlane := 0
+	separateColourPlaneFlag := false
 	videoFormat := 0
 	hasVideoFormat := false
 	sarWidth := uint32(1)
@@ -203,21 +217,31 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		chromaFormat = br.readUE()
 		if chromaFormat == 3 {
 			separateColourPlane = int(br.readBitsValue(1))
+			separateColourPlaneFlag = separateColourPlane == 1
 		}
 		bitDepthLuma := br.readUE() + 8
 		_ = br.readUE()
 		_ = br.readBitsValue(1)
 		bitDepth = bitDepthLuma
 		if br.readBitsValue(1) == 1 {
-			for range 8 {
+			scalingLists := 8
+			// H.264: 4:4:4 has 12 scaling lists (6x 4x4, 6x 8x8).
+			if chromaFormat == 3 && separateColourPlane == 0 {
+				scalingLists = 12
+			}
+			for i := 0; i < scalingLists; i++ {
 				if br.readBitsValue(1) == 1 {
-					skipScalingList(br, 16)
+					size := 16
+					if i >= 6 {
+						size = 64
+					}
+					skipScalingList(br, size)
 				}
 			}
 		}
 	}
 
-	_ = br.readUE()
+	log2MaxFrameNumMinus4 := br.readUE()
 	pocType := br.readUE()
 	switch pocType {
 	case 0:
@@ -238,12 +262,13 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 	picHeightMapUnitsMinus1 := br.readUE()
 	frameMbsOnly := br.readBitsValue(1)
 	progressive := frameMbsOnly == 1
+	mbaff := false
 	frameMbsOnlyInt := 0
 	if frameMbsOnly != 0 {
 		frameMbsOnlyInt = 1
 	}
 	if frameMbsOnly == 0 {
-		_ = br.readBitsValue(1)
+		mbaff = br.readBitsValue(1) == 1
 	}
 	_ = br.readBitsValue(1)
 	cropFlag := br.readBitsValue(1)
@@ -396,7 +421,11 @@ func parseH264SPS(nal []byte) h264SPSInfo {
 		BitDepth:                bitDepth,
 		RefFrames:               refFrames,
 		Progressive:             progressive,
+		MBAFF:                   mbaff,
 		HasScanType:             true,
+		FrameMbsOnly:            frameMbsOnly == 1,
+		Log2MaxFrameNumMinus4:   log2MaxFrameNumMinus4,
+		SeparateColourPlane:     separateColourPlaneFlag,
 		SARWidth:                sarWidth,
 		SARHeight:               sarHeight,
 		HasSAR:                  hasSAR,
@@ -693,6 +722,8 @@ func chromaFormatString(id int) string {
 
 func mapH264VideoFormat(id int) string {
 	switch id {
+	case 0:
+		return "Component"
 	case 1:
 		return "PAL"
 	case 2:

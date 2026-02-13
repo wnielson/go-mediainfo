@@ -697,6 +697,25 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 					general.JSON["StreamSize"] = strconv.FormatInt(fileSize-sum, 10)
 				}
 			}
+			// TS AVC/HEVC/etc: official MediaInfo also emits General FrameRate/FrameCount from the first video stream.
+			if general.JSON["FrameCount"] == "" || general.JSON["FrameRate"] == "" {
+				for _, st := range streams {
+					if st.Kind != StreamVideo || st.JSON == nil {
+						continue
+					}
+					if general.JSON["FrameRate"] == "" {
+						if fr := st.JSON["FrameRate"]; fr != "" {
+							general.JSON["FrameRate"] = fr
+						}
+					}
+					if general.JSON["FrameCount"] == "" {
+						if fc := st.JSON["FrameCount"]; fc != "" {
+							general.JSON["FrameCount"] = fc
+						}
+					}
+					break
+				}
+			}
 			if info.OverallBitrateMin > 0 && info.OverallBitrateMax > 0 {
 				minRate := int64(math.Round(info.OverallBitrateMin))
 				maxRate := int64(math.Round(info.OverallBitrateMax))
