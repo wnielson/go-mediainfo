@@ -1042,8 +1042,13 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				continue
 			}
 			// MediaInfoLib ParseSpeed<0.8: bias stats toward the head window, but still sample tail frames.
-			// Small tail-proportional bump improves parity for AC-3 `compr_*` stats on real-world BDAV.
-			max := headFrames + (tailFrames*5)/9
+			// Small tail-proportional bump improves parity for AC-3 `compr_*` stats on real-world TS/BDAV.
+			tailMulNum := uint64(5)
+			if !isBDAV {
+				// TS streams tend to match official outputs with a smaller tail contribution than BDAV.
+				tailMulNum = 3
+			}
+			max := headFrames + (tailFrames*tailMulNum)/9
 			// Small bias toward head-only stats when no tail window is present (e.g. small BDAV clips),
 			// while still matching MediaInfo's head+tail sampling on large files.
 			if tailFrames > 0 {
@@ -1935,7 +1940,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				if st.ac3Info.hasCompr {
 					extraFields = append(extraFields, jsonKV{Key: "compr", Val: fmt.Sprintf("%.2f", st.ac3Info.comprDB)})
 				}
-				if st.ac3Info.hasDynrng {
+				// MediaInfoLib does not expose dynrng for AC-3 stereo (acmod==2) streams at default ParseSpeed.
+				if st.ac3Info.hasDynrng && st.ac3Info.acmod != 2 {
 					extraFields = append(extraFields, jsonKV{Key: "dynrng", Val: fmt.Sprintf("%.2f", st.ac3Info.dynrngDB)})
 				}
 				if st.ac3Info.acmod > 0 {
@@ -1959,7 +1965,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					extraFields = append(extraFields, jsonKV{Key: "compr_Count", Val: strconv.Itoa(count)})
 				}
 				// MediaInfo uses first-frame-only dynrng presence to decide whether to expose dynrng_* stats.
-				if st.ac3Info.hasDynrng {
+				if st.ac3Info.hasDynrng && st.ac3Info.acmod != 2 {
 					if avg, minVal, maxVal, count, ok := st.ac3Stats.dynrngStats(); ok {
 						extraFields = append(extraFields, jsonKV{Key: "dynrng_Average", Val: fmt.Sprintf("%.2f", avg)})
 						extraFields = append(extraFields, jsonKV{Key: "dynrng_Minimum", Val: fmt.Sprintf("%.2f", minVal)})

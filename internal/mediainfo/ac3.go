@@ -406,14 +406,6 @@ func parseAC3Frame(payload []byte) (ac3Info, int, bool) {
 			}
 		}
 	}
-	// MediaInfoLib dynrng parsing expects audblk to start at the correct bit offset. Empirically,
-	// AC-3 stereo (acmod==2) streams with audprodie==1 carry a 2-bit pad before audblk, while
-	// other modes do not. Aligning unconditionally would break common mono/5.1 streams.
-	if audprodie == 1 && acmod == 2 {
-		if !br.alignToByte() {
-			return info, 0, false
-		}
-	}
 	if dynrnge, code, ok := parseAC3Dynrng(&br, int(acmod)); ok {
 		info.dynrngParsed = true
 		info.dynrnge = dynrnge
