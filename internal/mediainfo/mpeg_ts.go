@@ -84,12 +84,22 @@ type tsStream struct {
 	dtsHD               bool
 	hasTrueHD           bool
 	videoFrameRate      float64
-	pesData             []byte
-	audioBuffer         []byte
-	audioStarted        bool
-	videoStarted        bool
-	writingLibrary      string
-	encoding            string
+	// VC-1 (Blu-ray / TS) sequence header metadata.
+	vc1Parsed            bool
+	vc1Profile           string
+	vc1Level             int
+	vc1ChromaSubsampling string
+	vc1PixelAspectRatio  float64
+	vc1ScanType          string
+	vc1BufferSize        int64
+	vc1FrameRateNum      int
+	vc1FrameRateDen      int
+	pesData              []byte
+	audioBuffer          []byte
+	audioStarted         bool
+	videoStarted         bool
+	writingLibrary       string
+	encoding             string
 	// MPEG-2 GA94 caption user data is reordered by temporal_reference in MediaInfoLib before
 	// feeding the DTVCC/XDS parsers. We keep a small per-GOP buffer for XDS only.
 	mpeg2CurTemporalReference uint16
@@ -759,7 +769,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					data := payload[dataStart:]
 					entry.pesPayloadKnown = false
 					entry.pesPayloadRemaining = 0
-					if entry.kind == StreamAudio || (entry.kind == StreamVideo && entry.format == "MPEG Video") {
+					if entry.kind == StreamAudio || (entry.kind == StreamVideo && (entry.format == "MPEG Video" || entry.format == "VC-1")) {
 						if len(payload) >= 6 {
 							pesLen := int(binary.BigEndian.Uint16(payload[4:6]))
 							if pesLen > 0 {
@@ -783,6 +793,13 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						pidPayloadBytes[pid] += int64(len(data))
 					}
 					if entry.kind == StreamVideo && (entry.format == "AVC" || entry.format == "HEVC") && len(data) > 0 {
+						const maxPES = 512 * 1024
+						if len(data) > maxPES {
+							data = data[:maxPES]
+						}
+						entry.pesData = append(entry.pesData[:0], data...)
+					}
+					if entry.kind == StreamVideo && entry.format == "VC-1" && len(data) > 0 {
 						const maxPES = 512 * 1024
 						if len(data) > maxPES {
 							data = data[:maxPES]
@@ -841,6 +858,18 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				}
 
 				if entry.kind == StreamVideo && (entry.format == "AVC" || entry.format == "HEVC") && len(entry.pesData) > 0 {
+					const maxPES = 512 * 1024
+					if len(entry.pesData) < maxPES {
+						remaining := maxPES - len(entry.pesData)
+						if remaining > 0 {
+							if len(payload) > remaining {
+								payload = payload[:remaining]
+							}
+							entry.pesData = append(entry.pesData, payload...)
+						}
+					}
+				}
+				if entry.kind == StreamVideo && entry.format == "VC-1" && len(entry.pesData) > 0 {
 					const maxPES = 512 * 1024
 					if len(entry.pesData) < maxPES {
 						remaining := maxPES - len(entry.pesData)
@@ -1343,6 +1372,50 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			}
 		}
 		if st.kind == StreamVideo {
+			if st.format == "VC-1" && st.vc1Parsed {
+				if st.vc1Profile != "" {
+					fields = append(fields, Field{Name: "Format profile", Value: st.vc1Profile})
+					jsonExtras["Format_Profile"] = st.vc1Profile
+				}
+				if st.vc1Level > 0 {
+					level := strconv.Itoa(st.vc1Level)
+					fields = append(fields, Field{Name: "Format level", Value: level})
+					jsonExtras["Format_Level"] = level
+				}
+				// MediaInfo reports basic VC-1 pixel format fields for BDAV.
+				fields = append(fields, Field{Name: "Color space", Value: "YUV"})
+				jsonExtras["ColorSpace"] = "YUV"
+				if st.vc1ChromaSubsampling != "" {
+					fields = append(fields, Field{Name: "Chroma subsampling", Value: st.vc1ChromaSubsampling})
+					jsonExtras["ChromaSubsampling"] = st.vc1ChromaSubsampling
+				}
+				fields = append(fields, Field{Name: "Bit depth", Value: "8 bits"})
+				jsonExtras["BitDepth"] = "8"
+				if st.vc1ScanType != "" {
+					fields = append(fields, Field{Name: "Scan type", Value: st.vc1ScanType})
+					jsonExtras["ScanType"] = st.vc1ScanType
+				}
+				fields = append(fields, Field{Name: "Compression mode", Value: "Lossy"})
+				jsonExtras["Compression_Mode"] = "Lossy"
+				if st.vc1PixelAspectRatio > 0 {
+					jsonExtras["PixelAspectRatio"] = formatJSONFloat(st.vc1PixelAspectRatio)
+				}
+				if st.vc1BufferSize > 0 {
+					jsonExtras["BufferSize"] = strconv.FormatInt(st.vc1BufferSize, 10)
+				}
+				// Match MediaInfoLib: VC-1 exposes extra.format_identifier=VC-1 in BDAV.
+				if jsonRaw == nil {
+					jsonRaw = map[string]string{}
+				}
+				if _, ok := jsonRaw["extra"]; !ok {
+					jsonRaw["extra"] = "{\"format_identifier\":\"VC-1\"}"
+				}
+				// Prefer exact frame rate ratio when parsed.
+				if st.vc1FrameRateNum > 0 && st.vc1FrameRateDen > 0 {
+					jsonExtras["FrameRate_Num"] = strconv.Itoa(st.vc1FrameRateNum)
+					jsonExtras["FrameRate_Den"] = strconv.Itoa(st.vc1FrameRateDen)
+				}
+			}
 			duration := ptsDuration(st.pts)
 			if duration == 0 {
 				duration = videoDuration
@@ -1458,7 +1531,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if st.format != "MPEG Video" && !isBDAV {
 				fields = append(fields, Field{Name: "Frame rate mode", Value: "Variable"})
 			}
-			if isBDAV && st.format != "HEVC" {
+			if isBDAV && st.format == "AVC" {
 				// Match MediaInfo: BDAV video reports BitRate_Mode=VBR even when BitRate/StreamSize are omitted.
 				fields = append(fields, Field{Name: "Bit rate mode", Value: "Variable"})
 			}
@@ -2534,6 +2607,28 @@ func processPES(entry *tsStream) {
 			if !entry.hasVideoFields && len(fields) > 0 {
 				entry.videoFields = fields
 				entry.hasVideoFields = true
+			}
+		}
+	}
+	if entry.kind == StreamVideo && entry.format == "VC-1" && !entry.vc1Parsed && len(entry.pesData) > 0 {
+		if meta, ok := parseVC1AnnexBMeta(entry.pesData); ok {
+			entry.vc1Parsed = true
+			entry.vc1Profile = meta.Profile
+			entry.vc1Level = meta.Level
+			entry.vc1ChromaSubsampling = meta.ChromaSubsampling
+			entry.vc1PixelAspectRatio = meta.PixelAspectRatio
+			entry.vc1ScanType = meta.ScanType
+			entry.vc1BufferSize = meta.BufferSize
+			entry.vc1FrameRateNum = meta.FrameRateNum
+			entry.vc1FrameRateDen = meta.FrameRateDen
+			if meta.Width > 0 {
+				entry.width = meta.Width
+			}
+			if meta.Height > 0 {
+				entry.height = meta.Height
+			}
+			if meta.FrameRate > 0 {
+				entry.videoFrameRate = meta.FrameRate
 			}
 		}
 	}
