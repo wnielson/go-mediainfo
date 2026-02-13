@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -159,65 +158,8 @@ func normalizeTSStreamOrder(order []uint16, streams map[uint16]*tsStream, isBDAV
 		seen[pid] = struct{}{}
 		normalized = append(normalized, pid)
 	}
-	if !isBDAV {
-		return normalized
-	}
-
-	// BDAV ordering: MediaInfo tends to place the "main" video stream first, then audio/text,
-	// with secondary video streams (e.g., Dolby Vision enhancement/PiP) after the others.
-	primaryVideoPID := uint16(0)
-	var primaryVideoBytes uint64
-	for _, pid := range normalized {
-		st := streams[pid]
-		if st == nil || st.kind != StreamVideo {
-			continue
-		}
-		if primaryVideoPID == 0 || st.bytes > primaryVideoBytes {
-			primaryVideoPID = pid
-			primaryVideoBytes = st.bytes
-		}
-	}
-	if primaryVideoPID == 0 {
-		for _, pid := range normalized {
-			st := streams[pid]
-			if st != nil && st.kind == StreamVideo {
-				primaryVideoPID = pid
-				break
-			}
-		}
-	}
-
-	priority := func(st *tsStream) int {
-		if st == nil {
-			return 4
-		}
-		switch st.kind {
-		case StreamVideo:
-			if st.pid == primaryVideoPID {
-				return 0
-			}
-			return 4
-		case StreamAudio:
-			return 1
-		case StreamText:
-			return 2
-		default:
-			return 3
-		}
-	}
-	sort.SliceStable(normalized, func(i, j int) bool {
-		left := streams[normalized[i]]
-		right := streams[normalized[j]]
-		lp := priority(left)
-		rp := priority(right)
-		if lp != rp {
-			return lp < rp
-		}
-		if left != nil && right != nil && left.programNumber != right.programNumber {
-			return left.programNumber < right.programNumber
-		}
-		return normalized[i] < normalized[j]
-	})
+	// For BDAV, StreamOrder matches PMT entry order on real discs; preserve insertion order
+	// (we append streams in PMT order when available).
 	return normalized
 }
 
@@ -385,6 +327,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	var serviceType string
 	streams := map[uint16]*tsStream{}
 	streamOrder := []uint16{}
+	primaryPMTESOrder := []uint16{}
 	pendingPTS := map[uint16]*ptsTracker{}
 	var videoPTS ptsTracker
 	var anyPTS ptsTracker
@@ -631,6 +574,10 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 							if sectionLen > 0 {
 								pmtPointer = pointer
 								pmtSectionLen = sectionLen
+							}
+							primaryPMTESOrder = primaryPMTESOrder[:0]
+							for _, st := range parsed {
+								primaryPMTESOrder = append(primaryPMTESOrder, st.pid)
 							}
 						}
 						for _, st := range parsed {
@@ -1110,6 +1057,33 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		for _, st := range streams {
 			finalizeBoundedAC3Stats(st)
 		}
+	}
+
+	if isBDAV && len(primaryPMTESOrder) > 0 {
+		// Prefer PMT ES order for StreamOrder parity (notably UHD BDAV with enhancement layers).
+		seen := make(map[uint16]struct{}, len(streamOrder))
+		merged := make([]uint16, 0, len(streamOrder))
+		for _, pid := range primaryPMTESOrder {
+			if _, ok := streams[pid]; !ok {
+				continue
+			}
+			if _, ok := seen[pid]; ok {
+				continue
+			}
+			seen[pid] = struct{}{}
+			merged = append(merged, pid)
+		}
+		for _, pid := range streamOrder {
+			if _, ok := streams[pid]; !ok {
+				continue
+			}
+			if _, ok := seen[pid]; ok {
+				continue
+			}
+			seen[pid] = struct{}{}
+			merged = append(merged, pid)
+		}
+		streamOrder = merged
 	}
 
 	streamOrder = normalizeTSStreamOrder(streamOrder, streams, isBDAV)
@@ -2621,6 +2595,9 @@ func mapTSStream(streamType byte, formatID uint32) (StreamKind, string) {
 		case 0x81:
 			return StreamAudio, "AC-3"
 		case 0x82:
+			return StreamAudio, "DTS"
+		case 0x85, 0x86:
+			// DTS-HD (MA/HRA) stream types used on Blu-ray.
 			return StreamAudio, "DTS"
 		case 0x83:
 			// Blu-ray AC-3 with TrueHD extension.
