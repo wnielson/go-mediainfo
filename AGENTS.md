@@ -98,8 +98,9 @@ Owner: soup
 - Removed the AC-3 stereo `alignToByte()` dynrng hack (it caused BDAV false-positive `dynrng_*`).
 - TS output now suppresses `dynrng`/`dynrng_*` for AC-3 stereo (`acmod==2`) to match official behavior on sampled discs.
 - TS bounded ParseSpeed stats: reduced TS tail contribution vs BDAV to better match `compr_*`/`dynrng_*` counts/averages.
+- AC-3 dynrng stats: skip `dynrng=0xFF` ("unset") from histogram (matches MediaInfoLib; fixes `dynrng_Minimum=-0.14` on Nick Saturday sample).
 - Current focused diffs (same official command):
-- `Nickelodeon - Saturday Morning Promo.ts`: diff `8` (remaining: AC-3 `compr_*`/`dynrng_*` stats window/counts).
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `6` (remaining: AC-3 `compr_*`/`dynrng_*` stats window/counts).
 - `Nickelodeon - Generic Halloween Promo.ts`: diff `6` (remaining: AC-3 `compr_*`/`dynrng_*` stats window/counts).
 - `Disney Channel - Evermoor Behind The Scenes.ts`: diff `12` (remaining: AC-3 stats window/counts across both audio tracks).
 

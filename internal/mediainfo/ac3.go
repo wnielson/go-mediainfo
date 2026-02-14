@@ -748,7 +748,11 @@ func (info *ac3Info) mergeFrame(frame ac3Info) {
 	// MediaInfoLib counts dynrng for every parsed frame, using 0 when dynrnge is absent.
 	// The dynrng_* fields are only emitted if dynrnge has been seen at least once.
 	if frame.dynrngParsed {
-		info.dynrngs[frame.dynrngCode]++
+		// MediaInfoLib uses 0xFF as an "unset" initializer for dynrng. When dynrnge is set but the
+		// value is still 0xFF, it is treated as not present for stats.
+		if frame.dynrngCode != 0xFF {
+			info.dynrngs[frame.dynrngCode]++
+		}
 	}
 	if frame.hasMixlevel && !info.hasMixlevel {
 		info.mixlevel = frame.mixlevel
