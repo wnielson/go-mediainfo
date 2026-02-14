@@ -87,6 +87,7 @@ Owner: soup
 - `Assault in the Ring(2008.1080i.TS).ts`: diff `0` (AVC GOP `Format_Settings_GOP` now matches).
 - `David Bowie and the Story of Ziggy Stardust (2012) ... .ts`: diff `0` (DVB subtitle `Duration`/`Language` + region/page extras now match).
 - `Reigen Ohatsu - Furueru Iwa (2024).ts`: diff `524` (ISDB/ARIB metadata/text tracks not implemented).
+  - Scan note: no other obvious ARIB/ISDB `.ts` samples currently found under `/mnt/storage/torrents` or `/mnt/storage/torrents/ptp-archive`.
 - BDAV spot checks:
 - `Intruders .../00061.m2ts`: diff `0`.
 - `Network ... UHD .../00007.m2ts`: diff `0`.
