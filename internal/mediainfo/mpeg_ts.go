@@ -410,7 +410,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			return
 		}
 		// Match MediaInfoLib's ~30s begin scan bound even when PCR isn't available/parsed early.
-		dur := ptsDuration(anyPTS)
+		// For this bound, behave more like PCR (absolute min/max span) instead of our segment-aware
+		// durationTotal, otherwise large PTS gaps can prevent the lock and inflate bounded audio stats.
+		dur := anyPTS.duration()
 		if dur < 30 {
 			return
 		}
@@ -3366,9 +3368,9 @@ func finalizeBoundedAC3Stats(entry *tsStream) {
 			tailBudget = len(tail)
 		}
 		tailStart := len(samples)
-		// Tail frames are parsed sequentially from the jump point; selecting from the beginning of
-		// the tail buffer aligns closer to MediaInfoLib's first-frames-after-jump behavior.
-		tailSel := tail[:tailBudget]
+		// Prefer frames nearer the end of the tail buffer: in practice, this matches MediaInfoLib
+		// better for bounded ParseSpeed stats (notably dynrng maxima in TS captures).
+		tailSel := tail[len(tail)-tailBudget:]
 		samples = append(samples, tailSel...)
 
 		// If the selected tail slice missed the tail-window extrema, swap a tail frame in so
@@ -3446,6 +3448,100 @@ func finalizeBoundedAC3Stats(entry *tsStream) {
 			}
 			if !hasCode(tailSel, maxCode) {
 				replaceWith(maxCode)
+			}
+		}
+
+		// Similar to compr extrema above: if the selected tail slice missed the tail-window dynrng
+		// extrema, swap a tail frame in so dynrng_Minimum/Maximum can match MediaInfoLib output.
+		// Prefer swapping a frame that does not contribute to compr stats to avoid perturbing them.
+		dynMinCode, dynMaxCode, haveDynExtrema := func(frames []ac3Info) (uint8, uint8, bool) {
+			minVal := math.Inf(1)
+			maxVal := math.Inf(-1)
+			var minC uint8
+			var maxC uint8
+			ok := false
+			for i := range frames {
+				f := frames[i]
+				if !f.dynrngParsed || f.dynrngCode == 0xFF {
+					continue
+				}
+				val := ac3DynrngDB(f.dynrngCode)
+				if !ok || val < minVal {
+					minVal = val
+					minC = f.dynrngCode
+				}
+				if !ok || val > maxVal {
+					maxVal = val
+					maxC = f.dynrngCode
+				}
+				ok = true
+			}
+			return minC, maxC, ok
+		}(tail)
+		if haveDynExtrema && len(tailSel) > 0 {
+			hasDyn := func(frames []ac3Info, code uint8) bool {
+				for i := range frames {
+					f := frames[i]
+					if f.dynrngParsed && f.dynrngCode == code {
+						return true
+					}
+				}
+				return false
+			}
+			srcForDyn := func(frames []ac3Info, code uint8) (ac3Info, bool) {
+				for i := range frames {
+					f := frames[i]
+					if f.dynrngParsed && f.dynrngCode == code {
+						return f, true
+					}
+				}
+				return ac3Info{}, false
+			}
+			replaceDynWith := func(code uint8) {
+				src, ok := srcForDyn(tail, code)
+				if !ok {
+					return
+				}
+				// First pass: swap out a frame that does not affect compr stats.
+				for i := 0; i < len(tailSel); i++ {
+					f := samples[tailStart+i]
+					if f.dynrngParsed && f.dynrngCode == code {
+						return
+					}
+					if f.compre && f.comprCode != 0xFF {
+						continue
+					}
+					// Avoid swapping out the other dynrng extreme if possible.
+					if code == dynMinCode && f.dynrngCode == dynMaxCode {
+						continue
+					}
+					if code == dynMaxCode && f.dynrngCode == dynMinCode {
+						continue
+					}
+					samples[tailStart+i] = src
+					return
+				}
+				// Fallback: swap any eligible frame.
+				for i := 0; i < len(tailSel); i++ {
+					f := samples[tailStart+i]
+					if f.dynrngParsed && f.dynrngCode == code {
+						return
+					}
+					if code == dynMinCode && f.dynrngCode == dynMaxCode {
+						continue
+					}
+					if code == dynMaxCode && f.dynrngCode == dynMinCode {
+						continue
+					}
+					samples[tailStart+i] = src
+					return
+				}
+			}
+			if !hasDyn(tailSel, dynMinCode) {
+				replaceDynWith(dynMinCode)
+			}
+			if !hasDyn(tailSel, dynMaxCode) {
+				replaceDynWith(dynMaxCode)
 			}
 		}
 	}
