@@ -119,6 +119,17 @@ Owner: soup
 - `File_MpegTs.cpp`: when begin+end windows overlap, MediaInfo sets `MpegTs_JumpTo_End=0` (no end jump); current Go implementation still uses bounded head/tail sampling heuristics for stats.
 
 ## Status (2026-02-15)
+- CI: `gofmt` clean; `go test ./...` green.
+- TS bounded ParseSpeed windowing:
+- Added DTVCC-aware head-window shrink gating on PCR span (prevents premature lock; fixes caption `Duration_Start_Command` parity on Evermoor controls).
+- Added mid-file scan when DTVCC (CEA-708) seen (matches official read pattern).
+- Jump resets now freeze MPEG-2 GOP info before clearing parser state (prevents false `Format_Settings_GOP=Variable` regressions).
+- Current focused diffs (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- `Nickelodeon - Generic Halloween Promo.ts`: diff `0`.
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `6` (AC-3 stats counts/avg).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `6` (AC-3 stats counts; captions now match).
+
+## Status (2026-02-15)
 - CI/local: `gofmt` clean; `go test ./...` green.
 - TS parity controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - `Nickelodeon - Generic Halloween Promo.ts`: diff `0`.

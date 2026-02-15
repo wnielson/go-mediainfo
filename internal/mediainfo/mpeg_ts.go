@@ -346,10 +346,20 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		endPCR      uint64
 		startOffset int64
 		endOffset   int64
-		over30s     bool
+		overBound   bool
 		ok          bool
 	}
 	pcrSpans := map[uint16]*pcrSpan{}
+
+	// MediaInfo CLI adjusts TS scan duration when ParseSpeed is bounded (e.g. 0.5 default).
+	// Empirically (strace on /usr/bin/mediainfo), the effective begin/end window shrink triggers
+	// around ~16.8s of PCR timeline for TS captures.
+	const tsHeadBoundPCR = 453600000 // 16.8s * 27MHz
+	// DTVCC mid-scan mode uses a smaller head/tail window.
+	const tsHeadBoundPCRDTVCC = 225000000 // ~8.33s * 27MHz
+	const pcrBackAdjust = 10 * 90000 * 300
+	const pcrWrap = (uint64(1) << 33) * 300
+	const pcrHalfWrap = pcrWrap / 2
 
 	const tsPacketSize = int64(188)
 	if packetSize != tsPacketSize && packetSize != 192 {
@@ -366,19 +376,23 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		syncOff = off
 	}
 
-	// With ParseSpeed<0.8, MediaInfoLib scans bounded windows from the beginning/end of large TS/BDAV.
-	// This avoids full sequential reads for multi-GB streams while still capturing PTS/PCR and metadata.
-	partialScan := parseSpeed < 0.8 && size > 0 && size > 2*tsStatsMaxOffset
+	// With ParseSpeed<0.8, MediaInfoLib scans a bounded window from the beginning, may shrink it
+	// based on PCR/PTS time span, then (when seekable) jumps to mid/end windows.
+	partialScan := parseSpeed < 0.8 && size > 0
 	ac3StatsBounded := parseSpeed < 0.8 && size > 0
+	// BDAV/M2TS: keep the bounded head+tail stats sampling logic for parity without full-file scans.
+	// TS: accumulate stats from the parsed windows directly (no extra downsampling).
+	ac3StatsSampled := ac3StatsBounded && isBDAV
 	ac3StatsHeadBytes := int64(tsStatsMaxOffset)
 	ac3StatsHeadLocked := false
+	sawDTVCC := false
 
 	maybeLockAC3HeadByPCR := func(packetOffset int64) {
 		if !ac3StatsBounded || ac3StatsHeadLocked || size <= 0 {
 			return
 		}
-		// MediaInfoLib uses a time-based bound (~30s default) for the initial scan when ParseSpeed<0.8,
-		// and may shrink the begin/end byte windows once all PCR streams have exceeded it.
+		// MediaInfoLib shrinks the begin/end windows once all PCR streams have exceeded the begin scan
+		// duration bound, then stops parsing the head scan at the reduced byte window.
 		// Only relevant while we are still within the initial head window.
 		if packetOffset >= syncOff+int64(tsStatsMaxOffset) {
 			return
@@ -388,36 +402,12 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 		over := 0
 		for _, sp := range pcrSpans {
-			if sp != nil && sp.over30s {
+			if sp != nil && sp.overBound {
 				over++
 			}
 		}
-		// MediaInfoLib locks the begin scan as soon as a valid PCR timeline exceeds the bound.
-		// Requiring all PCR PIDs to exceed it can overscan and inflate bounded audio stats.
-		if over == 0 {
-			return
-		}
-		if packetOffset < syncOff {
-			return
-		}
-		rel := packetOffset - syncOff
-		ac3StatsHeadBytes = min(int64(tsStatsMaxOffset), rel+packetSize)
-		ac3StatsHeadLocked = true
-	}
-
-	maybeLockAC3HeadByPTS := func(packetOffset int64) {
-		if !ac3StatsBounded || ac3StatsHeadLocked || size <= 0 {
-			return
-		}
-		// Match MediaInfoLib's ~30s begin scan bound even when PCR isn't available/parsed early.
-		// For this bound, behave more like PCR (absolute min/max span) instead of our segment-aware
-		// durationTotal, otherwise large PTS gaps can prevent the lock and inflate bounded audio stats.
-		dur := anyPTS.duration()
-		if dur < 30 {
-			return
-		}
-		// Only relevant while we are still within the initial head window.
-		if packetOffset >= syncOff+int64(tsStatsMaxOffset) {
+		// MediaInfoLib: lock when *all* PCR streams have exceeded the bound.
+		if over == 0 || over != len(pcrSpans) {
 			return
 		}
 		if packetOffset < syncOff {
@@ -494,28 +484,40 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					adaptationLen := int(ts[4])
 					payloadIndex += 1 + adaptationLen
 				}
-				if _, ok := pcrPIDs[pid]; ok {
-					if pcr27, ok := parsePCR27(ts); ok {
-						pcrFull.add(pcr27)
-						// Keep legacy 90kHz PCR base for fields/flows that expect it.
-						pcrPTS.add(pcr27 / 300)
-						span := pcrSpans[pid]
-						if span == nil {
-							span = &pcrSpan{}
-							pcrSpans[pid] = span
-						}
-						if !span.ok {
-							span.startPCR = pcr27
-							span.startOffset = packetOffset
-							span.ok = true
-						}
-						span.endPCR = pcr27
-						span.endOffset = packetOffset
-						if span.ok && !span.over30s && span.endPCR >= span.startPCR && span.endPCR-span.startPCR > 30*27000000 {
-							span.over30s = true
-						}
-						maybeLockAC3HeadByPCR(packetOffset)
+				if pcr27, ok := parsePCR27(ts); ok {
+					// MediaInfoLib begins PCR timeline tracking opportunistically for any PID carrying PCR,
+					// not only for the PMT-signaled PCR PID. This matters for early scan window shrink.
+					pcrPIDs[pid] = struct{}{}
+					span := pcrSpans[pid]
+					if span == nil {
+						span = &pcrSpan{}
+						pcrSpans[pid] = span
 					}
+					pcrAdj := pcr27
+					if !span.ok {
+						span.startPCR = pcrAdj
+						span.startOffset = packetOffset
+						span.ok = true
+					} else {
+						// MediaInfoLib wrap detection: if PCR jumps backward by more than half the
+						// 33-bit range, treat it as wrap and add 2^33*300.
+						if pcrAdj < span.endPCR && pcrAdj+pcrHalfWrap < span.endPCR {
+							pcrAdj += pcrWrap
+						}
+						// Accept small backward jitter by moving the start.
+						if pcrAdj < span.startPCR && span.startPCR-pcrAdj < pcrBackAdjust {
+							span.startPCR = pcrAdj
+						}
+					}
+					pcrFull.add(pcrAdj)
+					// Keep legacy 90kHz PCR base for fields/flows that expect it.
+					pcrPTS.add(pcrAdj / 300)
+					span.endPCR = pcrAdj
+					span.endOffset = packetOffset
+					if span.ok && !span.overBound && span.endPCR >= span.startPCR && span.endPCR-span.startPCR > tsHeadBoundPCR {
+						span.overBound = true
+					}
+					maybeLockAC3HeadByPCR(packetOffset)
 				}
 				if adaptation == 2 {
 					continue
@@ -652,7 +654,6 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					if flags&0x80 != 0 {
 						if pts, ok := parsePTS(payload[9:]); ok {
 							addPTSMode(&anyPTS, pts, !partialScan)
-							maybeLockAC3HeadByPTS(packetOffset)
 							if entry, ok := streams[pid]; ok {
 								if entry.kind == StreamText {
 									addPTSTextMode(&entry.pts, pts, !partialScan)
@@ -816,6 +817,18 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 
 					if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(data) > 0 {
 						consumeMPEG2TSVideo(entry, data, entry.lastPTS, entry.hasLastPTS)
+						if !sawDTVCC && len(entry.dtvccServices) > 0 {
+							sawDTVCC = true
+						}
+						// MediaInfoLib performs a mid-file scan for DTVCC, and (empirically) the head/tail
+						// windows are smaller in this mode than for pure head+tail scanning.
+						if shrinkHead && ac3StatsBounded && !ac3StatsHeadLocked && packetOffset >= syncOff {
+							if len(entry.dtvccServices) > 0 && pcrFull.ok && (pcrFull.max-pcrFull.min) > tsHeadBoundPCRDTVCC {
+								rel := packetOffset - syncOff
+								ac3StatsHeadBytes = min(int64(tsStatsMaxOffset), rel+packetSize)
+								ac3StatsHeadLocked = true
+							}
+						}
 					}
 					if entry.kind == StreamVideo && entry.format == "AVC" && !entry.hasVideoFields && len(data) > 0 {
 						if fields, sps, ok := parseH264FromPES(data); ok && len(fields) > 0 {
@@ -848,7 +861,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						if !entry.audioStarted {
 							entry.audioStarted = true
 						}
-						consumeAudio(entry, data, collectAC3Stats, inHead, ac3StatsBounded)
+						consumeAudio(entry, data, collectAC3Stats, inHead, ac3StatsSampled)
 					}
 
 					if _, ok := videoPIDs[pid]; ok {
@@ -919,6 +932,16 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				}
 				if entry.kind == StreamVideo && entry.format == "MPEG Video" && len(payloadData) > 0 {
 					consumeMPEG2TSVideo(entry, payloadData, entry.lastPTS, entry.hasLastPTS)
+					if !sawDTVCC && len(entry.dtvccServices) > 0 {
+						sawDTVCC = true
+					}
+					if shrinkHead && ac3StatsBounded && !ac3StatsHeadLocked && packetOffset >= syncOff {
+						if len(entry.dtvccServices) > 0 && pcrFull.ok && (pcrFull.max-pcrFull.min) > tsHeadBoundPCRDTVCC {
+							rel := packetOffset - syncOff
+							ac3StatsHeadBytes = min(int64(tsStatsMaxOffset), rel+packetSize)
+							ac3StatsHeadLocked = true
+						}
+					}
 				}
 				if entry.kind == StreamAudio && len(payloadData) > 0 {
 					// Like MediaInfoLib, avoid parsing audio mid-PES before we've seen a PES start
@@ -927,9 +950,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					headEnd := syncOff + ac3StatsHeadBytes
 					inHead := !ac3StatsBounded || packetOffset < headEnd
 					if !entry.audioStarted {
-						// BDAV tail window can start mid-PES; allow resync there to avoid missing
-						// a small number of frames vs MediaInfoLib's end-window scan.
-						if !(isBDAV && ac3StatsBounded && !inHead) {
+						// Tail window can start mid-PES; allow resync there to avoid missing frames vs
+						// MediaInfoLib's end-window scan.
+						if !(ac3StatsBounded && tailStats && !inHead) {
 							continue
 						}
 					}
@@ -940,7 +963,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					}
 					entry.bytes += uint64(len(payloadData))
 					pidPayloadBytes[pid] += int64(len(payloadData))
-					consumeAudio(entry, payloadData, collectAC3Stats, inHead, ac3StatsBounded)
+					consumeAudio(entry, payloadData, collectAC3Stats, inHead, ac3StatsSampled)
 				}
 				if entry.kind != StreamAudio && len(payloadData) > 0 {
 					entry.bytes += uint64(len(payloadData))
@@ -1002,6 +1025,67 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				}
 			}
 		} else {
+			resetAfterJump := func() {
+				for _, st := range streams {
+					if st == nil {
+						continue
+					}
+					// MediaInfoLib calls Open_Buffer_Unsynch() on each sub-parser when it jumps.
+					// We "freeze" any MPEG-2 video-derived fields before clearing parser state so
+					// the tail/mid windows don't perturb GOP inference.
+					if st.kind == StreamVideo && st.format == "MPEG Video" && !st.hasMPEG2Info && st.mpeg2Parser != nil && st.mpeg2Parser.sawSequence {
+						info := st.mpeg2Parser.finalizeTS()
+						st.mpeg2Info = info
+						st.hasMPEG2Info = true
+						if info.Width > 0 {
+							st.width = info.Width
+						}
+						if info.Height > 0 {
+							st.height = info.Height
+						}
+						if info.FrameRate > 0 {
+							st.videoFrameRate = info.FrameRate
+						}
+					}
+					if len(st.pesData) > 0 {
+						// Match MediaInfoLib Open_Buffer_Unsynch(): do not force-parse partial PES data
+						// when jumping between bounded windows.
+						if st.pesPayloadKnown && st.pesPayloadRemaining == 0 {
+							processPES(st)
+						}
+					}
+					st.pesPayloadKnown = false
+					st.pesPayloadRemaining = 0
+					st.pesData = st.pesData[:0]
+					st.audioStarted = false
+					st.audioBuffer = st.audioBuffer[:0]
+					st.videoStarted = false
+					st.mpeg2Parser = nil
+					st.videoCCCarry = st.videoCCCarry[:0]
+					st.mpeg2XDSReorder = st.mpeg2XDSReorder[:0]
+				}
+			}
+
+			// MediaInfoLib sometimes performs an additional mid-file scan for DTVCC (CEA-708) when
+			// ParseSpeed is bounded, then continues with the end-window scan.
+			if !isBDAV && sawDTVCC && size > 0 && jumpBytes > 0 {
+				midStart := (size / 2) - jumpBytes
+				midEnd := (size / 2) + jumpBytes
+				if midStart < syncOff {
+					midStart = syncOff
+				}
+				if packetSize > 0 && midStart > syncOff {
+					midStart = syncOff + ((midStart-syncOff)/packetSize)*packetSize
+				}
+				if headEndActual < midStart && midEnd < tailStart {
+					resetAfterJump()
+					if !scanRange(midStart, midEnd, false, true) {
+						return ContainerInfo{}, nil, nil, false
+					}
+				}
+			}
+
+			resetAfterJump()
 			if !scanRange(tailStart, size, false, true) {
 				return ContainerInfo{}, nil, nil, false
 			}
@@ -1017,7 +1101,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		if len(entry.pesData) > 0 {
 			processPES(entry)
 		}
-		if entry.kind == StreamVideo && entry.format == "MPEG Video" && entry.mpeg2Parser != nil && entry.mpeg2Parser.sawSequence {
+		if entry.kind == StreamVideo && entry.format == "MPEG Video" && !entry.hasMPEG2Info && entry.mpeg2Parser != nil && entry.mpeg2Parser.sawSequence {
 			info := entry.mpeg2Parser.finalizeTS()
 			entry.mpeg2Info = info
 			entry.hasMPEG2Info = true
@@ -1063,7 +1147,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 	}
 
-	if ac3StatsBounded {
+	if ac3StatsSampled {
 		const headThreshold = 256
 		for _, st := range streams {
 			if st == nil || !st.hasAC3 {
@@ -1115,7 +1199,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 	}
 
-	if ac3StatsBounded {
+	if ac3StatsSampled {
 		for _, st := range streams {
 			finalizeBoundedAC3Stats(st)
 		}
