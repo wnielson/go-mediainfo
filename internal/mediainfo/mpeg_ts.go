@@ -3365,7 +3365,89 @@ func finalizeBoundedAC3Stats(entry *tsStream) {
 		if tailBudget > len(tail) {
 			tailBudget = len(tail)
 		}
-		samples = append(samples, tail[len(tail)-tailBudget:]...)
+		tailStart := len(samples)
+		// Tail frames are parsed sequentially from the jump point; selecting from the beginning of
+		// the tail buffer aligns closer to MediaInfoLib's first-frames-after-jump behavior.
+		tailSel := tail[:tailBudget]
+		samples = append(samples, tailSel...)
+
+		// If the selected tail slice missed the tail-window extrema, swap a tail frame in so
+		// Minimum/Maximum stats can match official output (notably AC-3 streams where the min
+		// compr code occurs earlier in the tail window).
+		minCode, maxCode, haveExtrema := func(frames []ac3Info) (uint8, uint8, bool) {
+			minVal := math.Inf(1)
+			maxVal := math.Inf(-1)
+			var minC uint8
+			var maxC uint8
+			ok := false
+			for i := range frames {
+				f := frames[i]
+				if !f.compre || f.comprCode == 0xFF {
+					continue
+				}
+				val := ac3ComprDB(f.comprCode)
+				if !ok || val < minVal {
+					minVal = val
+					minC = f.comprCode
+				}
+				if !ok || val > maxVal {
+					maxVal = val
+					maxC = f.comprCode
+				}
+				ok = true
+			}
+			return minC, maxC, ok
+		}(tail)
+		if haveExtrema && len(tailSel) > 0 {
+			hasCode := func(frames []ac3Info, code uint8) bool {
+				for i := range frames {
+					f := frames[i]
+					if f.compre && f.comprCode == code {
+						return true
+					}
+				}
+				return false
+			}
+			srcFor := func(frames []ac3Info, code uint8) (ac3Info, bool) {
+				for i := range frames {
+					f := frames[i]
+					if f.compre && f.comprCode == code {
+						return f, true
+					}
+				}
+				return ac3Info{}, false
+			}
+			replaceWith := func(code uint8) {
+				src, ok := srcFor(tail, code)
+				if !ok {
+					return
+				}
+				for i := 0; i < len(tailSel); i++ {
+					f := samples[tailStart+i]
+					if !f.compre || f.comprCode == 0xFF {
+						continue
+					}
+					if f.comprCode == code {
+						return
+					}
+					// Avoid swapping out the other extreme if possible.
+					if code == minCode && f.comprCode == maxCode {
+						continue
+					}
+					if code == maxCode && f.comprCode == minCode {
+						continue
+					}
+					samples[tailStart+i] = src
+					return
+				}
+			}
+			if !hasCode(tailSel, minCode) {
+				replaceWith(minCode)
+			}
+			if !hasCode(tailSel, maxCode) {
+				replaceWith(maxCode)
+			}
+		}
 	}
 	if len(samples) == 0 {
 		return

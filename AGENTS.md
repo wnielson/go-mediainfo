@@ -118,6 +118,14 @@ Owner: soup
 - MediaInfoLib note (likely relevant to remaining TS stats parity):
 - `File_MpegTs.cpp`: when begin+end windows overlap, MediaInfo sets `MpegTs_JumpTo_End=0` (no end jump); current Go implementation still uses bounded head/tail sampling heuristics for stats.
 
+## Status (2026-02-15)
+- CI: `gofmt` clean; `go test ./...` green.
+- TS parity controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- `Nickelodeon - Generic Halloween Promo.ts`: diff `0` (unchanged).
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `4` (still only `extra.compr_*` avg/count).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `10` (down from `12`): fixed `compr_Minimum` parity by ensuring tail-window extrema can be represented in the selected bounded tail slice.
+- Remaining Evermoor diffs: `compr_Count`/`compr_Average` (both AC-3 tracks) + `dynrng_Count` (track 7102).
+
 ## Learnings / Decisions
 - Command name: mediainfo
 - Parity target: MediaInfo-master in this repo
