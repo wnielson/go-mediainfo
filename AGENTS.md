@@ -121,6 +121,14 @@ Owner: soup
 ## Status (2026-02-15)
 - CI: `gofmt` clean; `go test ./...` green.
 - TS parity controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- `Nickelodeon - Generic Halloween Promo.ts`: diff `0` (must not regress).
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `4` (remaining: mono AC-3 `extra.compr_*` count/avg).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `10` (remaining: AC-3 `compr_*` and 5.1 `dynrng_Count` window).
+- Latest win: bounded TS/BDAV AC-3 stats now sample tail-end frames and swap in missing tail-window dynrng extrema (fixes Evermoor `dynrng_Maximum` parity).
+
+## Status (2026-02-15)
+- CI: `gofmt` clean; `go test ./...` green.
+- TS parity controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - `Nickelodeon - Generic Halloween Promo.ts`: diff `0` (unchanged).
 - `Nickelodeon - Saturday Morning Promo.ts`: diff `4` (still only `extra.compr_*` avg/count).
 - `Disney Channel - Evermoor Behind The Scenes.ts`: diff `10` (down from `12`): fixed `compr_Minimum` parity by ensuring tail-window extrema can be represented in the selected bounded tail slice.
