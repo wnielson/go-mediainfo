@@ -119,6 +119,14 @@ Owner: soup
 - `File_MpegTs.cpp`: when begin+end windows overlap, MediaInfo sets `MpegTs_JumpTo_End=0` (no end jump); current Go implementation still uses bounded head/tail sampling heuristics for stats.
 
 ## Status (2026-02-15)
+- CI/local: `gofmt` clean; `go test ./...` green.
+- TS parity controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- `Nickelodeon - Generic Halloween Promo.ts`: diff `0`.
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `4` (only `extra.compr_Average` + `extra.compr_Count`).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `10` (AC-3 stats windows: `compr_*` counts/avg on both audio, and `dynrng_Count` on 5.1).
+- Key validation: at `--ParseSpeed=1` on the same TS samples, our AC-3 `compr_*` / `dynrng_*` stats match official exactly; remaining mismatch is bounded ParseSpeed scan/sample window behavior (TS demux selection).
+
+## Status (2026-02-15)
 - CI: `gofmt` clean; `go test ./...` green.
 - TS parity controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - `Nickelodeon - Generic Halloween Promo.ts`: diff `0` (must not regress).
