@@ -9,7 +9,7 @@ cask "mediainfo" do
   name "mediainfo"
   desc "Go rewrite of MediaInfo CLI."
   homepage "https://github.com/autobrr/go-mediainfo"
-  version "0.1.6"
+  version "0.1.7"
 
   livecheck do
     skip "Auto-generated on release."
@@ -20,22 +20,22 @@ cask "mediainfo" do
   on_macos do
     on_intel do
       url "https://github.com/autobrr/go-mediainfo/releases/download/v#{version}/mediainfo_#{version}_darwin_amd64.tar.gz"
-      sha256 "32848ae242e18f1bcde5400863ee17e319ff5027a5eb899e9bbb70b46e248b86"
+      sha256 "75462ab6b6a8fe8fd4e5a849bd6221f182436eb6c64cc704e5e74968d56f3254"
     end
     on_arm do
       url "https://github.com/autobrr/go-mediainfo/releases/download/v#{version}/mediainfo_#{version}_darwin_arm64.tar.gz"
-      sha256 "5dde938758a707975660b99ae10b49d59333e2c2d7d0529bdf8fe57271ee57c9"
+      sha256 "12da63183d06ab6ce64772a65cfc0018e14a7db4a8a83dfd4baf9ae9cb7b5127"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/autobrr/go-mediainfo/releases/download/v#{version}/mediainfo_#{version}_linux_amd64.tar.gz"
-      sha256 "a79a1e1a27fabdb9ccc9d1510004455d8407a3beb1c2526588d959729dc72c87"
+      sha256 "2292b47290f7c0b6bf87cc2a50b1efc44dc72921f9a4975ed9e8db2e5c611442"
     end
     on_arm do
       url "https://github.com/autobrr/go-mediainfo/releases/download/v#{version}/mediainfo_#{version}_linux_arm64.tar.gz"
-      sha256 "fe2606424627f4e2d92da0f96320e25e9415aa8f48b878caa02c1f45c015cf50"
+      sha256 "a0030203e8805cd3eaec7878c7db792a80d8d425b906ebf3da25802005823bd7"
     end
   end
 
