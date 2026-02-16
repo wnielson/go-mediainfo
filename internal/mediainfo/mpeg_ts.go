@@ -1005,6 +1005,23 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	if ac3StatsHeadLocked && ac3StatsHeadBytes > 0 {
 		jumpBytes = ac3StatsHeadBytes
 	}
+	if !isBDAV && jumpBytes > 0 {
+		// MediaInfo's bounded TS scans advance in 64 KiB read blocks with a persistent packet phase,
+		// which yields an effective 65424-byte step on common captures.
+		const miStep = int64(65536 - 112)
+		rem := jumpBytes % miStep
+		if rem != 0 {
+			jumpBytes += miStep - rem
+		}
+		// Empirically, when lock happens right near a step boundary, MediaInfo often commits
+		// the jump a few read-blocks later (parser fill still in progress).
+		if rem > 0 && rem <= 4096 {
+			jumpBytes += 5 * miStep
+		}
+		if jumpBytes > int64(tsStatsMaxOffset) {
+			jumpBytes = int64(tsStatsMaxOffset)
+		}
+	}
 	shouldJump := ac3StatsBounded && size > 0 && jumpBytes > 0 && syncOff+jumpBytes < size-jumpBytes
 	if shouldJump || headStoppedEarly {
 		partialScan = true
