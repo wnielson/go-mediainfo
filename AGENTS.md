@@ -343,6 +343,12 @@ Owner: soup
 - TS 20-file safety sweep (Halloween controls subset): `improved=2 same=18 worse=0` vs `d135591`.
 - Tests: `go test ./...` green.
 - Perf spot-check (5 runs, ParseSpeed=0.5): no material regression on affected TS controls.
+- Fuzz harness added: `internal/mediainfo/fuzz_parsers_test.go` with targets for AC-3/E-AC-3 frame parsing, TS/BDAV packet parsing, and Matroska container parsing.
+- Fuzz smoke checks run:
+  - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseAC3FrameParsers -fuzztime=3s`
+  - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMPEGTSPacketizers -fuzztime=3s`
+  - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMatroskaContainers -fuzztime=3s`
+  - all pass.
 
 - Status (2026-02-12):
 - Parity snapshot (`mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
