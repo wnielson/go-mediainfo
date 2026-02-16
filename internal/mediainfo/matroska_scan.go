@@ -258,6 +258,13 @@ func readMatroskaElementHeader(er *ebmlReader, size int64, start int64) (uint64,
 	if elemSize == unknownVintSize {
 		elemSize = uint64(size - (er.pos - start))
 	}
+	remaining := size - (er.pos - start)
+	if remaining < 0 {
+		return 0, 0, io.ErrUnexpectedEOF
+	}
+	if elemSize > uint64(remaining) {
+		return 0, 0, io.ErrUnexpectedEOF
+	}
 	return id, elemSize, nil
 }
 
@@ -543,6 +550,14 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 				laceSum += size
 			}
 		case 3: // EBML
+			if frameCount < 2 {
+				if remaining := size - headerLen; remaining > 0 {
+					if err := er.skip(remaining); err != nil {
+						return 0, 0, 0, 0, err
+					}
+				}
+				return 0, 0, 0, 0, io.ErrUnexpectedEOF
+			}
 			readUnsigned := func(first byte) (uint64, int, error) {
 				length := vintLength(first)
 				if length == 0 {

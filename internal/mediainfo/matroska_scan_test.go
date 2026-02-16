@@ -1,6 +1,9 @@
 package mediainfo
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 type bitWriter struct {
 	b   []byte
@@ -112,5 +115,25 @@ func TestApplyMatroskaStats_AudioDurationAlsoSetsJSON(t *testing.T) {
 	}
 	if info.Tracks[0].JSON == nil || info.Tracks[0].JSON["Duration"] == "" {
 		t.Fatalf("expected JSON Duration set")
+	}
+}
+
+func TestReadMatroskaBlockHeader_InvalidEBMLLacingCount(t *testing.T) {
+	// track=1, timecode=0, flags=EBML lacing, lace count byte=0 (frameCount=1; malformed for EBML lacing)
+	block := []byte{0x81, 0x00, 0x00, 0x06, 0x00, 0x81, 0x00}
+	er := newEBMLReader(bytes.NewReader(block))
+	audio := map[uint64]*matroskaAudioProbe{
+		1: {format: "E-AC-3", collect: true},
+	}
+	if _, _, _, _, err := readMatroskaBlockHeader(er, int64(len(block)), audio, nil); err == nil {
+		t.Fatalf("expected error for malformed EBML lacing frame count")
+	}
+}
+
+func TestReadMatroskaElementHeader_SizeBeyondRemaining(t *testing.T) {
+	// id=Timecode (0xE7), size=1, but no payload remains.
+	er := newEBMLReader(bytes.NewReader([]byte{0xE7, 0x81}))
+	if _, _, err := readMatroskaElementHeader(er, 2, 0); err == nil {
+		t.Fatalf("expected error for element size beyond remaining bytes")
 	}
 }

@@ -343,13 +343,18 @@ Owner: soup
 - TS 20-file safety sweep (Halloween controls subset): `improved=2 same=18 worse=0` vs `d135591`.
 - Tests: `go test ./...` green.
 - Perf spot-check (5 runs, ParseSpeed=0.5): no material regression on affected TS controls.
-- Fuzz harness added: `internal/mediainfo/fuzz_parsers_test.go` with targets for AC-3/E-AC-3 frame parsing, TS/BDAV packet parsing, and Matroska container parsing.
+- Fuzz harness added: `internal/mediainfo/fuzz_parsers_test.go` with targets for AC-3/E-AC-3 frame parsing, TS/BDAV packet parsing, Matroska container parsing, Matroska block-header parsing, and Matroska cluster scanning.
+- Matroska hardening fixes from fuzz findings:
+  - `readMatroskaBlockHeader`: malformed EBML lacing with `frameCount=1` now returns error instead of panicking.
+  - `readMatroskaElementHeader`: now rejects element sizes larger than remaining bytes (prevents huge allocations/OOM on malformed inputs).
 - Fuzz smoke checks run:
   - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseAC3FrameParsers -fuzztime=3s`
   - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMPEGTSPacketizers -fuzztime=3s`
   - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMatroskaContainers -fuzztime=3s`
+  - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzReadMatroskaBlockHeader -fuzztime=3s`
+  - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzScanMatroskaClusters -fuzztime=3s`
   - all pass.
-- CI now runs a bounded fuzz smoke stage (`go fuzz smoke`) after `go test` using the same 3 targets/timeouts.
+- CI now runs a bounded fuzz smoke stage (`go fuzz smoke`) after `go test` using the same 5 targets/timeouts.
 
 - Status (2026-02-12):
 - Parity snapshot (`mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):

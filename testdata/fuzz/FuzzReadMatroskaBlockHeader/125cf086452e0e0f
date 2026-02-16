@@ -1,0 +1,4 @@
+go test fuzz v1
+[]byte("\x81007\x00A0")
+uint16(38)
+byte('\x02')
