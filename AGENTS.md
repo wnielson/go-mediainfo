@@ -333,6 +333,18 @@ Owner: soup
 - IO: avoid full-dataset sweeps on `/mnt/storage/torrents*`; sample a few files per type; stop runaway jobs fast.
 
 - Status (2026-02-12):
+- Status (2026-02-16):
+- TS bounded-window jump parity tweak: when DTVCC detected, add one `miStep` before mid/tail jumps (kept existing near-boundary non-DTVCC padding).
+- Focused parity (`mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- `Nickelodeon - Generic Halloween Promo.ts`: diff `0` (unchanged).
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `6` (unchanged: `compr_Count 297/298`, `dynrng_Count 1016/1017`, `dynrng_Average 0.25/0.26`).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `2` (improved from `4`; now only `dynrng_Count 793/796`).
+- Additional TS control improved: `Disney XD on Disney Channel 10-25 Saturday Night Promo.ts` diff `5 -> 1`.
+- TS 20-file safety sweep (Halloween controls subset): `improved=2 same=18 worse=0` vs `d135591`.
+- Tests: `go test ./...` green.
+- Perf spot-check (5 runs, ParseSpeed=0.5): no material regression on affected TS controls.
+
+- Status (2026-02-12):
 - Parity snapshot (`mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - TS: `Nickelodeon - Halloween Bumper 2.ts` diff=0, `Evermoor Behind The Scenes.ts` diff=25 (mostly AC-3 stats).
 - BDAV/M2TS: AC-3 bounded stats parity now 1:1 on local control set:

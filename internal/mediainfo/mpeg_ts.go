@@ -1013,8 +1013,12 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		if rem != 0 {
 			jumpBytes += miStep - rem
 		}
-		// Empirically, when lock happens right near a step boundary, MediaInfo often commits
-		// the jump a few read-blocks later (parser fill still in progress).
+		// Empirical TS alignment:
+		// - DTVCC captures usually advance one additional step before the mid/tail jumps.
+		// - Non-DTVCC captures locked very near a step boundary may advance several extra steps.
+		if sawDTVCC {
+			jumpBytes += miStep
+		}
 		if rem > 0 && rem <= 8192 {
 			jumpBytes += 10 * miStep
 		}
