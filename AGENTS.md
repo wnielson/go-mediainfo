@@ -168,6 +168,7 @@ Owner: soup
 - Pushed: `af65c88` (`fix(ts): quantize bounded jump window to mediainfo step`).
 - Matroska fuzz/CI: fixed lacing size validation in `readMatroskaBlockHeader` to prevent oversized `readN()` allocations on malformed blocks; added regression test + corpus seed.
 - Scheduled fuzz: `.github/workflows/fuzz.yml` daily (~10m) + manual trigger; CI keeps 3s fuzz smokes.
+- Fuzz targets: added container/parser fuzzers for `MP4`, `AVI`, `MPEG-PS`, `FLAC`, `MP3` (available for manual runs; scheduled job currently runs TS/Matroska/AC-3-focused targets).
 
 ## Learnings / Decisions
 - Command name: mediainfo

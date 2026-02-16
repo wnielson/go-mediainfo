@@ -61,6 +61,79 @@ func FuzzParseMatroskaContainers(f *testing.F) {
 	})
 }
 
+func FuzzParseMP4Containers(f *testing.F) {
+	// Minimal ftyp box.
+	f.Add([]byte{
+		0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p',
+		'i', 's', 'o', 'm',
+		0x00, 0x00, 0x02, 0x00,
+		'i', 's', 'o', 'm', 'm', 'p', '4', '2',
+	})
+	// Minimal moov/mvhd-ish header (not valid; just structure noise).
+	f.Add([]byte{
+		0x00, 0x00, 0x00, 0x10, 'm', 'o', 'o', 'v',
+		0x00, 0x00, 0x00, 0x08, 'm', 'v', 'h', 'd',
+	})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		data = fuzzLimit(data)
+		_, _ = ParseMP4(bytes.NewReader(data), int64(len(data)))
+	})
+}
+
+func FuzzParseAVIContainers(f *testing.F) {
+	// Minimal RIFF AVI header.
+	f.Add([]byte{
+		'R', 'I', 'F', 'F', 0x24, 0x00, 0x00, 0x00,
+		'A', 'V', 'I', ' ',
+		'L', 'I', 'S', 'T', 0x14, 0x00, 0x00, 0x00,
+		'h', 'd', 'r', 'l',
+	})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		data = fuzzLimit(data)
+		r := bytes.NewReader(data)
+		_, _, _, _ = ParseAVI(r, int64(len(data)))
+	})
+}
+
+func FuzzParseMPEGPSContainers(f *testing.F) {
+	// Minimal pack header start code.
+	f.Add([]byte{0x00, 0x00, 0x01, 0xBA, 0x44, 0x00, 0x04, 0x00})
+	// Program stream map start code.
+	f.Add([]byte{0x00, 0x00, 0x01, 0xBC, 0x00, 0x00})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		data = fuzzLimit(data)
+		r := bytes.NewReader(data)
+		_, _, _ = ParseMPEGPS(r, int64(len(data)))
+	})
+}
+
+func FuzzParseFLACContainers(f *testing.F) {
+	f.Add([]byte{'f', 'L', 'a', 'C'})
+	f.Add([]byte{'f', 'L', 'a', 'C', 0x00, 0x00, 0x00, 0x22})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		data = fuzzLimit(data)
+		r := bytes.NewReader(data)
+		_, _, _, _, _ = ParseFLAC(r, int64(len(data)))
+	})
+}
+
+func FuzzParseMP3Containers(f *testing.F) {
+	// Minimal ID3 header.
+	f.Add([]byte{'I', 'D', '3', 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	// Minimal MPEG audio sync-ish bytes.
+	f.Add([]byte{0xFF, 0xFB, 0x90, 0x64})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		data = fuzzLimit(data)
+		r := bytes.NewReader(data)
+		_, _, _, _, _ = ParseMP3(r, int64(len(data)))
+	})
+}
+
 func FuzzReadMatroskaBlockHeader(f *testing.F) {
 	f1 := makeEAC3FrameForFuzz(16, 1)
 	f2 := makeEAC3FrameForFuzz(16, 2)
