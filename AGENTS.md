@@ -390,3 +390,11 @@ Owner: soup
 
 - Verification method:
 - Compare official `/usr/bin/mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5` vs `/tmp/go-mediainfo --output=JSON --language=raw`, normalize with `jq -S` and `del(.creatingLibrary)`, then `diff -u`.
+
+- Status (2026-02-16):
+- TS bounded ParseSpeed windowing: align PCR/DTVCC head-stop boundary to the same jump-aligned `MpegTs_JumpTo_Begin` value (fixes AC-3 stats window/count parity when the head scan is shrunk).
+  - Avoid double-applying DTVCC step alignment when head size is already locked/aligned.
+- Parity controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+  - `Nickelodeon - Generic Halloween Promo.ts`: diff `0`.
+  - `Nickelodeon - Saturday Morning Promo.ts`: diff `0` (AC-3 `compr_*`/`dynrng_*`).
+  - `Disney Channel - Evermoor Behind The Scenes.ts`: diff `0` (AC-3 stats on both audio tracks).

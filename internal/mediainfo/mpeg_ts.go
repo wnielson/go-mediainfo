@@ -352,8 +352,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	pcrSpans := map[uint16]*pcrSpan{}
 
 	// MediaInfo CLI adjusts TS scan duration when ParseSpeed is bounded (e.g. 0.5 default).
-	// Empirically (strace on /usr/bin/mediainfo), the effective begin/end window shrink triggers
-	// around ~16.8s of PCR timeline for TS captures.
+	// Empirically (strace on /usr/bin/mediainfo, MediaInfoLib v23.04), the effective begin/end
+	// window shrink triggers around ~16.8s of PCR timeline for TS captures.
 	const tsHeadBoundPCR = 453600000 // 16.8s * 27MHz
 	// DTVCC mid-scan mode uses a smaller head/tail window.
 	const tsHeadBoundPCRDTVCC = 225000000 // ~8.33s * 27MHz
@@ -385,7 +385,34 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	ac3StatsSampled := ac3StatsBounded && isBDAV
 	ac3StatsHeadBytes := int64(tsStatsMaxOffset)
 	ac3StatsHeadLocked := false
+	ac3StatsHeadAligned := false
 	sawDTVCC := false
+
+	alignTSJumpBytes := func(jumpBytes int64) int64 {
+		// MediaInfo's bounded TS scans advance in 64 KiB read blocks with a persistent packet phase,
+		// which yields an effective 65424-byte step on common captures.
+		const miStep = int64(65536 - 112)
+		if jumpBytes <= 0 {
+			return jumpBytes
+		}
+		rem := jumpBytes % miStep
+		if rem != 0 {
+			jumpBytes += miStep - rem
+		}
+		// Empirical TS alignment:
+		// - DTVCC captures can advance one additional step before mid/tail jumps.
+		// - Non-DTVCC captures locked very near a step boundary may advance a few extra steps.
+		if sawDTVCC {
+			jumpBytes += miStep
+		}
+		if rem > 0 && rem <= 8192 {
+			jumpBytes += 5 * miStep
+		}
+		if jumpBytes > int64(tsStatsMaxOffset) {
+			jumpBytes = int64(tsStatsMaxOffset)
+		}
+		return jumpBytes
+	}
 
 	maybeLockAC3HeadByPCR := func(packetOffset int64) {
 		if !ac3StatsBounded || ac3StatsHeadLocked || size <= 0 {
@@ -415,6 +442,10 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 		rel := packetOffset - syncOff
 		ac3StatsHeadBytes = min(int64(tsStatsMaxOffset), rel+packetSize)
+		if !isBDAV {
+			ac3StatsHeadBytes = alignTSJumpBytes(ac3StatsHeadBytes)
+			ac3StatsHeadAligned = true
+		}
 		ac3StatsHeadLocked = true
 	}
 
@@ -826,6 +857,10 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 							if len(entry.dtvccServices) > 0 && pcrFull.ok && (pcrFull.max-pcrFull.min) > tsHeadBoundPCRDTVCC {
 								rel := packetOffset - syncOff
 								ac3StatsHeadBytes = min(int64(tsStatsMaxOffset), rel+packetSize)
+								if !isBDAV {
+									ac3StatsHeadBytes = alignTSJumpBytes(ac3StatsHeadBytes)
+									ac3StatsHeadAligned = true
+								}
 								ac3StatsHeadLocked = true
 							}
 						}
@@ -939,6 +974,10 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						if len(entry.dtvccServices) > 0 && pcrFull.ok && (pcrFull.max-pcrFull.min) > tsHeadBoundPCRDTVCC {
 							rel := packetOffset - syncOff
 							ac3StatsHeadBytes = min(int64(tsStatsMaxOffset), rel+packetSize)
+							if !isBDAV {
+								ac3StatsHeadBytes = alignTSJumpBytes(ac3StatsHeadBytes)
+								ac3StatsHeadAligned = true
+							}
 							ac3StatsHeadLocked = true
 						}
 					}
@@ -955,6 +994,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 						if !(ac3StatsBounded && tailStats && !inHead) {
 							continue
 						}
+						// Treat tail-window parsing as "started" so AC-3/E-AC-3 resync isn't overly strict
+						// for frames that aren't byte-contiguous at the scan boundary.
+						entry.audioStarted = true
 					}
 					collectAC3Stats := inHead
 					// Only collect tail-window stats when we are actually performing a tail scan.
@@ -1005,26 +1047,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	if ac3StatsHeadLocked && ac3StatsHeadBytes > 0 {
 		jumpBytes = ac3StatsHeadBytes
 	}
-	if !isBDAV && jumpBytes > 0 {
-		// MediaInfo's bounded TS scans advance in 64 KiB read blocks with a persistent packet phase,
-		// which yields an effective 65424-byte step on common captures.
-		const miStep = int64(65536 - 112)
-		rem := jumpBytes % miStep
-		if rem != 0 {
-			jumpBytes += miStep - rem
-		}
-		// Empirical TS alignment:
-		// - DTVCC captures usually advance one additional step before the mid/tail jumps.
-		// - Non-DTVCC captures locked very near a step boundary may advance several extra steps.
-		if sawDTVCC {
-			jumpBytes += miStep
-		}
-		if rem > 0 && rem <= 8192 {
-			jumpBytes += 10 * miStep
-		}
-		if jumpBytes > int64(tsStatsMaxOffset) {
-			jumpBytes = int64(tsStatsMaxOffset)
-		}
+	if !isBDAV && jumpBytes > 0 && !(ac3StatsHeadLocked && ac3StatsHeadAligned) {
+		jumpBytes = alignTSJumpBytes(jumpBytes)
 	}
 	shouldJump := ac3StatsBounded && size > 0 && jumpBytes > 0 && syncOff+jumpBytes < size-jumpBytes
 	if shouldJump || headStoppedEarly {
