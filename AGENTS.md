@@ -153,6 +153,17 @@ Owner: soup
 - `Disney Channel - Evermoor Behind The Scenes.ts`: diff `10` (down from `12`): fixed `compr_Minimum` parity by ensuring tail-window extrema can be represented in the selected bounded tail slice.
 - Remaining Evermoor diffs: `compr_Count`/`compr_Average` (both AC-3 tracks) + `dynrng_Count` (track 7102).
 
+## Status (2026-02-16)
+- CI/local: `gofmt` clean; `go test ./...` green.
+- TS controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
+- `Nickelodeon - Generic Halloween Promo.ts`: diff `0`.
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `3` (`extra.compr_Count`, `extra.dynrng_Count`, `extra.dynrng_Average`).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `3` (`extra.compr_Count` on both AC-3 tracks + `extra.dynrng_Count` on 5.1 track).
+- Parameter sweeps (local-only; reverted):
+- `tsHeadBoundPCR`: baseline `453600000` remains best on controls (higher values overcount Nick controls).
+- `tsHeadBoundPCRDTVCC`: baseline `225000000` remains best on controls (lower values undercount Evermoor; higher values overcount).
+- Tail-start lead and TS AC-3 sampled-mode variants were tested and reverted (no safe net win across control set).
+
 ## Learnings / Decisions
 - Command name: mediainfo
 - Parity target: MediaInfo-master in this repo
