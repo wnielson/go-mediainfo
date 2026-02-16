@@ -349,6 +349,7 @@ Owner: soup
   - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMPEGTSPacketizers -fuzztime=3s`
   - `go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMatroskaContainers -fuzztime=3s`
   - all pass.
+- CI now runs a bounded fuzz smoke stage (`go fuzz smoke`) after `go test` using the same 3 targets/timeouts.
 
 - Status (2026-02-12):
 - Parity snapshot (`mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
