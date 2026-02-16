@@ -1015,8 +1015,8 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 		// Empirically, when lock happens right near a step boundary, MediaInfo often commits
 		// the jump a few read-blocks later (parser fill still in progress).
-		if rem > 0 && rem <= 4096 {
-			jumpBytes += 5 * miStep
+		if rem > 0 && rem <= 8192 {
+			jumpBytes += 10 * miStep
 		}
 		if jumpBytes > int64(tsStatsMaxOffset) {
 			jumpBytes = int64(tsStatsMaxOffset)
