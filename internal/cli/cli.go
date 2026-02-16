@@ -47,6 +47,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		switch {
 		case normalized == "--full" || normalized == "-f":
 			opts.Full = true
+		case normalized == "--version":
+			Version(stdout)
+			return exitOK
 		case normalized == "--help" || normalized == "-h":
 			Help(program, stdout)
 			return exitOK
@@ -204,7 +207,7 @@ func runCore(opts Options, files []string) (string, int, error) {
 
 		outputName := strings.ToUpper(strings.TrimSpace(opts.Output))
 		switch outputName {
-		case "TEXT", "JSON", "XML", "OLDXML", "HTML", "CSV", "EBUCORE", "EBUCORE_JSON", "PBCORE", "PBCORE2":
+		case "TEXT", "JSON", "XML", "OLDXML", "HTML", "CSV", "EBUCORE", "EBUCORE_JSON", "PBCORE", "PBCORE2", "GRAPH_SVG", "GRAPH_DOT":
 		default:
 			return "", 0, fmt.Errorf("output format not implemented: %s", opts.Output)
 		}

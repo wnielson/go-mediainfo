@@ -42,7 +42,7 @@ var rootCmd = &cobra.Command{
 	SilenceErrors:      true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {
-			_ = cmd.Help()
+			cli.Help(cmd.Name(), cmd.OutOrStdout())
 			return
 		}
 		os.Exit(cli.Run(append([]string{cmd.Name()}, args...), cmd.OutOrStdout(), cmd.ErrOrStderr()))
