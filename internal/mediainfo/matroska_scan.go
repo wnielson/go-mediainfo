@@ -488,6 +488,13 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 	if trackLen == 0 {
 		return 0, 0, 0, 0, io.ErrUnexpectedEOF
 	}
+	// Block/SimpleBlock minimum header is: track (vint) + timecode(2) + flags(1).
+	if int64(trackLen+3) > size {
+		if remaining := size - 1; remaining > 0 {
+			_ = er.skip(remaining)
+		}
+		return 0, 0, 0, 0, io.ErrUnexpectedEOF
+	}
 	trackVal := uint64(first & byte(0xFF>>trackLen))
 	for i := 1; i < trackLen; i++ {
 		b, err := er.readByte()
@@ -520,47 +527,56 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 	var laceSizes []int64
 	var laceSum int64
 	if lacing != 0 {
+		if headerLen >= size {
+			return 0, 0, 0, 0, io.ErrUnexpectedEOF
+		}
 		countByte, err := er.readByte()
 		if err != nil {
 			return 0, 0, 0, 0, err
 		}
 		headerLen++
 		frameCount = int64(countByte) + 1
+		// Lacing implies multiple frames. A lace count of 0 is malformed.
+		if frameCount < 2 {
+			if remaining := size - headerLen; remaining > 0 {
+				_ = er.skip(remaining)
+			}
+			return 0, 0, 0, 0, io.ErrUnexpectedEOF
+		}
 		switch lacing {
 		case 1: // Xiph
 			if needProbePayload && frameCount > 1 {
 				laceSizes = make([]int64, frameCount-1)
 			}
 			for i := int64(0); i < frameCount-1; i++ {
-				size := int64(0)
+				laceSize := int64(0)
 				for {
+					if headerLen >= size {
+						return 0, 0, 0, 0, io.ErrUnexpectedEOF
+					}
 					b, err := er.readByte()
 					if err != nil {
 						return 0, 0, 0, 0, err
 					}
 					headerLen++
-					size += int64(b)
+					laceSize += int64(b)
 					if b != 0xFF {
 						break
 					}
 				}
 				if needProbePayload {
-					laceSizes[i] = size
+					laceSizes[i] = laceSize
 				}
-				laceSum += size
+				laceSum += laceSize
 			}
 		case 3: // EBML
-			if frameCount < 2 {
-				if remaining := size - headerLen; remaining > 0 {
-					if err := er.skip(remaining); err != nil {
-						return 0, 0, 0, 0, err
-					}
-				}
-				return 0, 0, 0, 0, io.ErrUnexpectedEOF
-			}
-			readUnsigned := func(first byte) (uint64, int, error) {
+			readUnsigned := func(first byte, remaining int64) (uint64, int, error) {
 				length := vintLength(first)
 				if length == 0 {
+					return 0, 0, io.ErrUnexpectedEOF
+				}
+				// first byte already read by caller; remaining includes it.
+				if int64(length) > remaining {
 					return 0, 0, io.ErrUnexpectedEOF
 				}
 				mask := byte(0xFF >> length)
@@ -574,10 +590,13 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 				}
 				return value, length, nil
 			}
-			readSigned := func(first byte) (int64, int, error) {
-				value, length, err := readUnsigned(first)
+			readSigned := func(first byte, remaining int64) (int64, int, error) {
+				value, length, err := readUnsigned(first, remaining)
 				if err != nil {
 					return 0, 0, err
+				}
+				if value > uint64(int64(^uint64(0)>>1)) {
+					return 0, 0, io.ErrUnexpectedEOF
 				}
 				bias := int64(1)<<(uint(length*7-1)) - 1
 				return int64(value) - bias, length, nil
@@ -585,40 +604,72 @@ func readMatroskaBlockHeader(er *ebmlReader, size int64, audioProbes map[uint64]
 			if needProbePayload && frameCount > 1 {
 				laceSizes = make([]int64, frameCount-1)
 			}
+			if headerLen >= size {
+				return 0, 0, 0, 0, io.ErrUnexpectedEOF
+			}
 			firstSizeByte, err := er.readByte()
 			if err != nil {
 				return 0, 0, 0, 0, err
 			}
-			sizeVal, length, err := readUnsigned(firstSizeByte)
+			sizeVal, length, err := readUnsigned(firstSizeByte, size-headerLen)
 			if err != nil {
 				return 0, 0, 0, 0, err
 			}
 			headerLen += int64(length)
+			if sizeVal > uint64(size) {
+				return 0, 0, 0, 0, io.ErrUnexpectedEOF
+			}
 			if needProbePayload {
 				laceSizes[0] = int64(sizeVal)
 			}
 			laceSum = int64(sizeVal)
 			prev := int64(sizeVal)
 			for i := int64(1); i < frameCount-1; i++ {
+				if headerLen >= size {
+					return 0, 0, 0, 0, io.ErrUnexpectedEOF
+				}
 				firstDiff, err := er.readByte()
 				if err != nil {
 					return 0, 0, 0, 0, err
 				}
-				diff, length, err := readSigned(firstDiff)
+				diff, length, err := readSigned(firstDiff, size-headerLen)
 				if err != nil {
 					return 0, 0, 0, 0, err
 				}
 				headerLen += int64(length)
-				size := prev + diff
-				if needProbePayload {
-					laceSizes[i] = size
+				next := prev + diff
+				if (diff > 0 && next < prev) || (diff < 0 && next > prev) {
+					return 0, 0, 0, 0, io.ErrUnexpectedEOF
 				}
-				laceSum += size
-				prev = size
+				if next < 0 || next > size {
+					return 0, 0, 0, 0, io.ErrUnexpectedEOF
+				}
+				if needProbePayload {
+					laceSizes[i] = next
+				}
+				laceSum += next
+				prev = next
 			}
 		}
 	}
 	dataSize := size - headerLen
+	if dataSize < 0 {
+		return 0, 0, 0, 0, io.ErrUnexpectedEOF
+	}
+	if needProbePayload && frameCount > 1 && (lacing == 1 || lacing == 3) {
+		// Lace sizes must be within the block payload; otherwise probing can request absurd reads.
+		if laceSum < 0 || laceSum > dataSize {
+			return 0, 0, 0, 0, io.ErrUnexpectedEOF
+		}
+		if int64(len(laceSizes)) != frameCount-1 {
+			return 0, 0, 0, 0, io.ErrUnexpectedEOF
+		}
+		for _, s := range laceSizes {
+			if s < 0 || s > dataSize {
+				return 0, 0, 0, 0, io.ErrUnexpectedEOF
+			}
+		}
+	}
 	if dataSize > 0 {
 		if needProbePayload {
 			// MediaInfoLib increments PacketCount per Block/SimpleBlock, then may stop searching

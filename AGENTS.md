@@ -166,6 +166,7 @@ Owner: soup
 - Debug finding (TS AC-3 stats): on `Nickelodeon - Saturday Morning Promo.ts` PID `0x1917`, current bounded windows yield `headFrames=515`, `tailFrames=545`, `compr_Count=286`, `dynrng_Count=1005`; brute force over head/tail selection with same frame pool cannot reach official (`compr_Count=298`, `dynrng_Count=1017`) -> remaining gap is scan-window/frame-capture timing, not histogram merge math.
 - TS bounded jump quantization: align `jumpBytes` to MediaInfo-like 65424-byte effective step (`64 KiB - 112`), with near-boundary pad (`<=8192` remainder -> +10 steps). Control impact: `Generic` stays `0`, `Saturday` stays `6`, `Evermoor` improves `6 -> 4`; `Saturday` values moved closer (`compr_Count 297 vs 298`, `dynrng_Count 1016 vs 1017`); 15-file TS sample slice showed `0` regressions (`improved=0 same=15 worse=0`).
 - Pushed: `af65c88` (`fix(ts): quantize bounded jump window to mediainfo step`).
+- Matroska fuzz/CI: fixed lacing size validation in `readMatroskaBlockHeader` to prevent oversized `readN()` allocations on malformed blocks; added regression test + corpus seed.
 
 ## Learnings / Decisions
 - Command name: mediainfo

@@ -130,6 +130,29 @@ func TestReadMatroskaBlockHeader_InvalidEBMLLacingCount(t *testing.T) {
 	}
 }
 
+func TestReadMatroskaBlockHeader_EBMLLacingOversizedLaceRejected(t *testing.T) {
+	// EBML lacing: make the first lace size absurdly large compared to the block payload.
+	// Without bounds checks, this can trigger huge allocations when probing E-AC-3 with parseJOC=true.
+	//
+	// track=1, timecode=0, flags=EBML lacing, lace count byte=1 (frameCount=2),
+	// first lace size vint = 0x1FFFFFFF (length=4) -> 268435455.
+	block := []byte{
+		0x81,       // track=1
+		0x00, 0x00, // timecode=0
+		0x06, // EBML lacing
+		0x01, // lace count=1 => frameCount=2
+		0x1F, 0xFF, 0xFF, 0xFF,
+		0x00, // payload byte
+	}
+	er := newEBMLReader(bytes.NewReader(block))
+	audio := map[uint64]*matroskaAudioProbe{
+		1: {format: "E-AC-3", collect: true, parseJOC: true, targetPackets: 1},
+	}
+	if _, _, _, _, err := readMatroskaBlockHeader(er, int64(len(block)), audio, nil); err == nil {
+		t.Fatalf("expected error for oversized EBML lacing frame size")
+	}
+}
+
 func TestReadMatroskaElementHeader_SizeBeyondRemaining(t *testing.T) {
 	// id=Timecode (0xE7), size=1, but no payload remains.
 	er := newEBMLReader(bytes.NewReader([]byte{0xE7, 0x81}))
