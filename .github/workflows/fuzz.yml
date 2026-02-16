@@ -1,0 +1,49 @@
+name: fuzz
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily long-ish fuzz run; CI keeps short smokes.
+    - cron: "17 05 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go fuzz (10m)
+        run: |
+          set -euo pipefail
+          go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseAC3FrameParsers -fuzztime=2m
+          go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMPEGTSPacketizers -fuzztime=2m
+          go test ./internal/mediainfo -run=^$ -fuzz=FuzzParseMatroskaContainers -fuzztime=2m
+          go test ./internal/mediainfo -run=^$ -fuzz=FuzzReadMatroskaBlockHeader -fuzztime=2m
+          go test ./internal/mediainfo -run=^$ -fuzz=FuzzScanMatroskaClusters -fuzztime=2m
+
+      - name: Upload fuzz crashers/corpus
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          if-no-files-found: ignore
+          path: |
+            testdata/fuzz/
+
