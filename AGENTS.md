@@ -344,6 +344,8 @@ Owner: soup
 - Tests: `go test ./...` green.
 - Perf spot-check (5 runs, ParseSpeed=0.5): no material regression on affected TS controls.
 - Fuzz harness added: `internal/mediainfo/fuzz_parsers_test.go` with targets for AC-3/E-AC-3 frame parsing, TS/BDAV packet parsing, Matroska container parsing, Matroska block-header parsing, and Matroska cluster scanning.
+- End-to-end smoke coverage now includes a minimal `.m2ts` analyze/render test: `internal/mediainfo/m2ts_smoke_test.go`.
+- Note: `.mpls` playlist parsing is still not implemented in this repo (no parser path yet).
 - Matroska hardening fixes from fuzz findings:
   - `readMatroskaBlockHeader`: malformed EBML lacing with `frameCount=1` now returns error instead of panicking.
   - `readMatroskaElementHeader`: now rejects element sizes larger than remaining bytes (prevents huge allocations/OOM on malformed inputs).
