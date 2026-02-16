@@ -11,6 +11,22 @@ Owner: soup
 - Don't ask for "continue": run parity + perf loops automatically, then commit/push once verified.
 - For `/mnt/storage/...` scans: be polite to disks (sample files; avoid full-tree scans; use `ionice -c3 nice -n 10` when doing bulk comparisons).
 
+## Status (2026-02-16)
+- CI: `gofmt` clean; `go test ./...` green.
+- Parity target: official `/usr/bin/mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5` (MediaInfoLib v23.04).
+- TS parity controls: `Nickelodeon - Generic Halloween Promo.ts=0`, `Nickelodeon - Saturday Morning Promo.ts=0`, `Disney Channel - Evermoor Behind The Scenes.ts=0`.
+- BDAV/M2TS parity spot checks now `0` on user discs:
+  - `Static .../BDMV/STREAM/00004.m2ts`
+  - `Intruders .../BDMV/STREAM/00061.m2ts`
+  - `Sabrina .../BDMV/STREAM/00003.m2ts`
+  - `Network UHD .../BDMV/STREAM/00005.m2ts` (HEVC derived `StreamSize`/`BitRate` + General remainder math)
+  - `Network UHD .../BDMV/STREAM/00007.m2ts` (AC-3 dynrng_* suppression for mono)
+  - `Excalibur UHD .../BDMV/STREAM/00004.m2ts` (bounded tail window selection + long-duration rounding)
+- BDAV bounded ParseSpeed behavior aligned closer to MediaInfoLib:
+  - PCR head shrink threshold: ~30s for BDAV (vs ~16.8s for TS captures); tail window uses head-sized end window when shrunk, else uses 16 MiB.
+  - Long BDAV video Duration (`>= 3600s`): JSON uses millisecond truncation to match official 0.001s rounding on long clips.
+  - AVC `Format_Settings_GOP`: emitted for BDAV only when duration window is stable (`>= 120s`), to avoid false-positive GOP on short clips.
+
 ## Status (2026-02-09)
 - CI: green on `main` (recent runs: MP4/AVI/MPEG-PS fixes).
 - Parity: verified 1:1 JSON raw vs `/usr/bin/mediainfo` (MediaInfoLib v23.04) for:

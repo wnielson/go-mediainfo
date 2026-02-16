@@ -353,10 +353,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 
 	// MediaInfo CLI adjusts TS scan duration when ParseSpeed is bounded (e.g. 0.5 default).
 	// Empirically (strace on /usr/bin/mediainfo, MediaInfoLib v23.04), the effective begin/end
-	// window shrink triggers around ~16.8s of PCR timeline for TS captures.
-	const tsHeadBoundPCR = 453600000 // 16.8s * 27MHz
+	// window shrink triggers around ~16.8s of PCR timeline for TS captures, and ~30s for BDAV.
+	const tsHeadBoundPCR uint64 = 453600000   // 16.8s * 27MHz
+	const bdavHeadBoundPCR uint64 = 810000000 // 30s * 27MHz
 	// DTVCC mid-scan mode uses a smaller head/tail window.
-	const tsHeadBoundPCRDTVCC = 225000000 // ~8.33s * 27MHz
+	const tsHeadBoundPCRDTVCC uint64 = 225000000 // ~8.33s * 27MHz
 	const pcrBackAdjust = 10 * 90000 * 300
 	const pcrWrap = (uint64(1) << 33) * 300
 	const pcrHalfWrap = pcrWrap / 2
@@ -380,9 +381,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	// based on PCR/PTS time span, then (when seekable) jumps to mid/end windows.
 	partialScan := parseSpeed < 0.8 && size > 0
 	ac3StatsBounded := parseSpeed < 0.8 && size > 0
-	// BDAV/M2TS: keep the bounded head+tail stats sampling logic for parity without full-file scans.
-	// TS: accumulate stats from the parsed windows directly (no extra downsampling).
-	ac3StatsSampled := ac3StatsBounded && isBDAV
+	// MediaInfoLib derives AC-3/E-AC-3 stats directly from the parsed windows at bounded ParseSpeed;
+	// do not further downsample after parsing.
+	ac3StatsSampled := false
 	ac3StatsHeadBytes := int64(tsStatsMaxOffset)
 	ac3StatsHeadLocked := false
 	ac3StatsHeadAligned := false
@@ -433,8 +434,14 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				over++
 			}
 		}
-		// MediaInfoLib: lock when *all* PCR streams have exceeded the bound.
-		if over == 0 || over != len(pcrSpans) {
+		// MediaInfoLib: TS captures tend to require *all* PCR streams exceeding the bound before
+		// shrinking the scan window. BDAV discs often signal multiple PCR PIDs; shrinking aligns
+		// closer to official output when any PCR span crosses the bound.
+		if !isBDAV {
+			if over == 0 || over != len(pcrSpans) {
+				return
+			}
+		} else if over == 0 {
 			return
 		}
 		if packetOffset < syncOff {
@@ -545,7 +552,11 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					pcrPTS.add(pcrAdj / 300)
 					span.endPCR = pcrAdj
 					span.endOffset = packetOffset
-					if span.ok && !span.overBound && span.endPCR >= span.startPCR && span.endPCR-span.startPCR > tsHeadBoundPCR {
+					headBoundPCR := tsHeadBoundPCR
+					if isBDAV {
+						headBoundPCR = bdavHeadBoundPCR
+					}
+					if span.ok && !span.overBound && span.endPCR >= span.startPCR && span.endPCR-span.startPCR > headBoundPCR {
 						span.overBound = true
 					}
 					maybeLockAC3HeadByPCR(packetOffset)
@@ -1050,11 +1061,22 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 	if !isBDAV && jumpBytes > 0 && !(ac3StatsHeadLocked && ac3StatsHeadAligned) {
 		jumpBytes = alignTSJumpBytes(jumpBytes)
 	}
-	shouldJump := ac3StatsBounded && size > 0 && jumpBytes > 0 && syncOff+jumpBytes < size-jumpBytes
+
+	// MediaInfoLib (v23.04): when bounded ParseSpeed is active and the head scan is not shrunk,
+	// the end-window scan is smaller than the begin-window scan (default is MpegTs_MaximumOffset/4).
+	tailBytes := int64(tsStatsMaxOffset) / 4
+	if tailBytes <= 0 {
+		tailBytes = jumpBytes
+	}
+	if ac3StatsHeadLocked {
+		tailBytes = jumpBytes
+	}
+
+	shouldJump := ac3StatsBounded && size > 0 && jumpBytes > 0 && tailBytes > 0 && syncOff+jumpBytes < size-tailBytes
 	if shouldJump || headStoppedEarly {
 		partialScan = true
 		// Match MediaInfoLib: start tail scan at the official tail window boundary.
-		tailStart := size - jumpBytes
+		tailStart := size - tailBytes
 		if tailStart < syncOff {
 			tailStart = syncOff
 		}
@@ -1137,7 +1159,7 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 		}
 	} else if headEndActual < size {
 		// Large file with no tail scan configured: continue sequential parsing.
-		if !scanRange(headEndActual, size, false, false) {
+		if !scanRange(headEndActual, size, false, ac3StatsBounded) {
 			return ContainerInfo{}, nil, nil, false
 		}
 	}
@@ -1208,6 +1230,12 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			// the head window before emitting stats (avoids false-positive syncs in low-data scans).
 			if !st.ac3Stats.dynrngeSeen && st.ac3StatsComprHead < headThreshold {
 				st.audioFramesStatsMax = 0
+				continue
+			}
+			if isBDAV {
+				// MediaInfoLib chooses a stats window size based on the initial (head) scan only.
+				// Empirically this matches ~0.75*N+4 of head-window frames at ParseSpeed=0.5.
+				st.audioFramesStatsMax = (headFrames*3)/4 + 4
 				continue
 			}
 			// MediaInfoLib ParseSpeed<0.8: bias stats toward the head window, but still sample tail frames.
@@ -1647,10 +1675,6 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					}
 				}
 			}
-			if (!isBDAV || !partialScan) && st.format == "AVC" && st.h264GOPM > 0 && st.h264GOPN > 0 {
-				gop := fmt.Sprintf("M=%d, N=%d", st.h264GOPM, st.h264GOPN)
-				jsonExtras["Format_Settings_GOP"] = gop
-			}
 			duration := ptsDuration(st.pts)
 			if duration == 0 {
 				duration = videoDuration
@@ -1684,11 +1708,37 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 			if duration > 0 && st.videoFrameRate > 0 && st.format != "MPEG Video" {
 				duration += 1.0 / st.videoFrameRate
 			}
+			bdavVideoFrameCount := int64(0)
+			if isBDAV && st.kind == StreamVideo && duration > 0 && st.videoFrameRate > 0 {
+				// MediaInfoLib BDAV: normalize Duration to an integer FrameCount and the stream's exact
+				// frame rate ratio (e.g. 24000/1001), which avoids 0.001s rounding drift on long clips.
+				bdavVideoFrameCount = int64(math.Round(duration * st.videoFrameRate))
+				if bdavVideoFrameCount > 0 {
+					if num, den := rationalizeFrameRate(st.videoFrameRate); num > 0 && den > 0 {
+						duration = float64(bdavVideoFrameCount) * float64(den) / float64(num)
+					}
+				}
+			}
+			if (isBDAV || !partialScan) && st.format == "AVC" && st.h264GOPM > 0 && st.h264GOPN > 0 {
+				// MediaInfoLib: BDAV GOP is only exposed once we have a stable enough duration window.
+				if !isBDAV || duration >= 120 {
+					gop := fmt.Sprintf("M=%d, N=%d", st.h264GOPM, st.h264GOPN)
+					jsonExtras["Format_Settings_GOP"] = gop
+				}
+			}
 			if duration > 0 {
 				fields = addStreamDuration(fields, duration)
 				if isBDAV {
-					jsonExtras["Duration"] = fmt.Sprintf("%.3f", duration)
-					if st.videoFrameRate > 0 {
+					if st.kind == StreamVideo && duration >= 3600 {
+						// MediaInfoLib BDAV: long video durations can round 0.001s lower than fmt("%.3f")
+						// when derived from sparse PTS windows; truncation matches official outputs.
+						jsonExtras["Duration"] = formatJSONFloatTrunc(duration)
+					} else {
+						jsonExtras["Duration"] = fmt.Sprintf("%.3f", duration)
+					}
+					if bdavVideoFrameCount > 0 {
+						jsonExtras["FrameCount"] = strconv.FormatInt(bdavVideoFrameCount, 10)
+					} else if st.videoFrameRate > 0 {
 						jsonExtras["FrameCount"] = strconv.Itoa(int(math.Round(duration * st.videoFrameRate)))
 					}
 				} else if hasMPEGVideo && st.format == "MPEG Video" {
@@ -2126,8 +2176,9 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 				if st.ac3Info.hasCompr {
 					extraFields = append(extraFields, jsonKV{Key: "compr", Val: fmt.Sprintf("%.2f", st.ac3Info.comprDB)})
 				}
-				// MediaInfoLib does not expose dynrng for AC-3 stereo (acmod==2) streams at default ParseSpeed.
-				if st.ac3Info.hasDynrng && st.ac3Info.acmod != 2 {
+				// MediaInfoLib does not expose dynrng for AC-3 stereo (acmod==2) in TS captures at the
+				// default ParseSpeed, but it does for BDAV/M2TS.
+				if st.ac3Info.hasDynrng && (isBDAV || st.ac3Info.acmod != 2) {
 					extraFields = append(extraFields, jsonKV{Key: "dynrng", Val: fmt.Sprintf("%.2f", st.ac3Info.dynrngDB)})
 				}
 				if st.ac3Info.acmod > 0 {
@@ -2150,8 +2201,10 @@ func parseMPEGTSWithPacketSize(file io.ReadSeeker, size int64, packetSize int64,
 					extraFields = append(extraFields, jsonKV{Key: "compr_Maximum", Val: fmt.Sprintf("%.2f", maxVal)})
 					extraFields = append(extraFields, jsonKV{Key: "compr_Count", Val: strconv.Itoa(count)})
 				}
-				// MediaInfo uses first-frame-only dynrng presence to decide whether to expose dynrng_* stats.
-				if st.ac3Info.hasDynrng && st.ac3Info.acmod != 2 {
+				// MediaInfo uses dynrnge existence (any frame) to decide whether to expose dynrng_* stats.
+				// TS captures: stereo (acmod==2) is suppressed at default ParseSpeed.
+				// BDAV: mono (acmod==1) is suppressed.
+				if (!isBDAV && st.ac3Info.acmod != 2) || (isBDAV && st.ac3Info.acmod != 1) {
 					if avg, minVal, maxVal, count, ok := st.ac3Stats.dynrngStats(); ok {
 						extraFields = append(extraFields, jsonKV{Key: "dynrng_Average", Val: fmt.Sprintf("%.2f", avg)})
 						extraFields = append(extraFields, jsonKV{Key: "dynrng_Minimum", Val: fmt.Sprintf("%.2f", minVal)})

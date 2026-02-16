@@ -752,22 +752,30 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			}
 			hasHEVC := false
 			hasPCM := false
+			videoStreams := 0
+			audioStreams := 0
+			textStreams := 0
 			for _, st := range streams {
 				switch st.Kind {
 				case StreamVideo:
+					videoStreams++
 					if findField(st.Fields, "Format") == "HEVC" {
 						hasHEVC = true
 					}
 				case StreamAudio:
+					audioStreams++
 					if findField(st.Fields, "Format") == "PCM" {
 						hasPCM = true
 					}
+				case StreamText:
+					textStreams++
 				}
 			}
 			// Blu-ray max mux rate (per MediaInfo output).
-			// UHD BD: MediaInfo reports 109 Mb/s, or 127.9 Mb/s when LPCM is present.
+			// UHD BD: MediaInfo reports 109 Mb/s, but can report 127.9 Mb/s for simple single-A/V
+			// streams (and when LPCM is present).
 			if hasHEVC {
-				if hasPCM {
+				if hasPCM || (videoStreams == 1 && audioStreams == 1 && textStreams == 0) {
 					general.JSON["OverallBitRate_Maximum"] = "127900000"
 				} else {
 					general.JSON["OverallBitRate_Maximum"] = "109000000"
@@ -925,8 +933,12 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 			var audioSum int64
 			audioCount := 0
 			audioSizedCount := 0
+			textCount := 0
 			for _, stream := range streams {
 				if stream.Kind != StreamAudio || stream.JSON == nil {
+					if stream.Kind == StreamText {
+						textCount++
+					}
 					continue
 				}
 				audioCount++
@@ -948,9 +960,11 @@ func AnalyzeFileWithOptions(path string, opts AnalyzeOptions) (Report, error) {
 				}
 			}
 
-			// MediaInfo BDAV behavior: derive StreamSize (and sometimes BitRate) only for AVC/MPEG-2
-			// BDAV. UHD/HEVC BDAV typically omits these derived StreamSize fields.
-			if primaryVideoFormat != "HEVC" {
+			// MediaInfo BDAV behavior: derive StreamSize (and sometimes BitRate) when audio StreamSize is
+			// available for all audio streams. UHD/HEVC BDAV often omits these fields (subtitles present,
+			// or unsized audio at default ParseSpeed).
+			applyBDAVSizing := primaryVideoFormat != "HEVC" || (textCount == 0 && audioCount > 0 && audioSizedCount == audioCount)
+			if applyBDAVSizing {
 				// MediaInfo BDAV behavior: derive video bitrate/size from overall bitrate,
 				// subtracting audio + text overhead, then set General StreamSize as the remainder.
 				appliedBDAVSizing := false
