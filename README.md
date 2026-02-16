@@ -46,10 +46,11 @@ mediainfo /path/to/file
 ```
 
 ```sh
-mediainfo /path/to/file --output=JSON
-mediainfo /path/to/file --full
+mediainfo /path/to/file --Output=JSON --Language=raw
+mediainfo /path/to/file --Output=JSON --Language=raw --ParseSpeed=0.5
 mediainfo /path/to/dir
-mediainfo --info-parameters
+mediainfo --Info-Parameters
+mediainfo --Version
 mediainfo update
 mediainfo version
 ```
@@ -61,13 +62,16 @@ Footer includes `ReportBy : go-mediainfo - vX.Y.Z`.
 
 ## Options
 
-- `-f, --full` (complete report)
-- `--output=...` (TEXT/JSON/XML/OLDXML/HTML/CSV/EBUCore/EBUCore_JSON/PBCore/PBCore2/Graph_Svg/Graph_Dot)
-- `--language=...` (output language)
-- `--logfile=...` (write output to a file)
-- `--bom` (write UTF-8 BOM on Windows)
-- `--help`, `--help-output`
-- `--info-parameters`
+- `--Output=...` (TEXT/JSON/XML/OLDXML/HTML/CSV/EBUCore/EBUCore_JSON/PBCore/PBCore2/Graph_Svg/Graph_Dot)
+- `--Language=raw` (non-translated unique identifiers; recommended for parity)
+- `-lang=raw` (alias for `--Language=raw`)
+- `--LogFile=...` (write output to a file)
+- `--BOM` (write UTF-8 BOM on Windows)
+- `--ParseSpeed=0..1` (speed/accuracy tradeoff; default `0.5`)
+- `--File_TestContinuousFileNames=0|1` (MediaInfo-style continuous filename probing; default `0`)
+- `--Help`, `--Help-Output`
+- `--Info-Parameters`
+- `-f, --Full` (reserved; currently no-op)
 
 ## Commands
 
