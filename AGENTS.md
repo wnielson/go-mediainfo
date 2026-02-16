@@ -157,14 +157,15 @@ Owner: soup
 - CI/local: `gofmt` clean; `go test ./...` green.
 - TS controls (official: `mediainfo --Output=JSON --Language=raw --ParseSpeed=0.5`):
 - `Nickelodeon - Generic Halloween Promo.ts`: diff `0`.
-- `Nickelodeon - Saturday Morning Promo.ts`: diff `3` (`extra.compr_Count`, `extra.dynrng_Count`, `extra.dynrng_Average`).
-- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `3` (`extra.compr_Count` on both AC-3 tracks + `extra.dynrng_Count` on 5.1 track).
+- `Nickelodeon - Saturday Morning Promo.ts`: diff `6` TSV-lines (`3` fields: `extra.compr_Count`, `extra.dynrng_Count`, `extra.dynrng_Average`).
+- `Disney Channel - Evermoor Behind The Scenes.ts`: diff `4` TSV-lines (`2` fields on track 7102: `extra.compr_Count`, `extra.dynrng_Count`).
 - Parameter sweeps (local-only; reverted):
 - `tsHeadBoundPCR`: baseline `453600000` remains best on controls (higher values overcount Nick controls).
 - `tsHeadBoundPCRDTVCC`: baseline `225000000` remains best on controls (lower values undercount Evermoor; higher values overcount).
 - Tail-start lead and TS AC-3 sampled-mode variants were tested and reverted (no safe net win across control set).
 - Debug finding (TS AC-3 stats): on `Nickelodeon - Saturday Morning Promo.ts` PID `0x1917`, current bounded windows yield `headFrames=515`, `tailFrames=545`, `compr_Count=286`, `dynrng_Count=1005`; brute force over head/tail selection with same frame pool cannot reach official (`compr_Count=298`, `dynrng_Count=1017`) -> remaining gap is scan-window/frame-capture timing, not histogram merge math.
 - TS bounded jump quantization: align `jumpBytes` to MediaInfo-like 65424-byte effective step (`64 KiB - 112`), with a small near-boundary pad (`<=4096` remainder -> +5 steps). Control impact: `Generic` stays `0`, `Saturday` stays `6`, `Evermoor` improves `6 -> 4`; 15-file TS sample slice showed `0` regressions (`improved=0 same=15 worse=0`).
+- Pushed: `af65c88` (`fix(ts): quantize bounded jump window to mediainfo step`).
 
 ## Learnings / Decisions
 - Command name: mediainfo
